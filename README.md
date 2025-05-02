@@ -23,11 +23,7 @@ The application is entirely client-side, meaning no backend server is required f
 
 ## Demo 🎥
 
-*(Add a GIF or video demonstrating the app's functionality here)*
 
-```
-[Your GIF Demo Here]
-```
 
 ## Getting Started 🚀
 
