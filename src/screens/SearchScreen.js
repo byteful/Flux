@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -12,6 +12,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
+import { useFocusEffect } from '@react-navigation/native';
+import Animated, { useSharedValue, useAnimatedStyle, withTiming } from 'react-native-reanimated';
 import { searchMedia, getImageUrl } from '../api/tmdbApi';
 import { getMediaType } from '../api/vidsrcApi';
 
@@ -20,23 +22,39 @@ const SearchScreen = ({ navigation }) => {
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const [noResults, setNoResults] = useState(false);
+  const opacity = useSharedValue(0);
+
+  const animatedStyle = useAnimatedStyle(() => {
+    return {
+      opacity: opacity.value,
+    };
+  });
+
+  useFocusEffect(
+    useCallback(() => {
+      opacity.value = 0;
+      opacity.value = withTiming(1, { duration: 300 });
+      return () => {
+        // Optional fade out
+      };
+    }, [opacity])
+  );
 
   const handleSearch = async () => {
     if (!query.trim()) return;
-    
+
     setLoading(true);
     setNoResults(false);
-    
+
     try {
       const searchResults = await searchMedia(query);
-      
-      // Filter out results without poster images and results that aren't movies or TV shows
+
       const filteredResults = searchResults.filter(
-        (item) => 
-          (item.poster_path || item.backdrop_path) && 
+        (item) =>
+          (item.poster_path || item.backdrop_path) &&
           (item.media_type === 'movie' || item.media_type === 'tv')
       );
-      
+
       setResults(filteredResults);
       setNoResults(filteredResults.length === 0);
     } catch (error) {
@@ -50,10 +68,9 @@ const SearchScreen = ({ navigation }) => {
 
   const handleItemPress = (item) => {
     const mediaType = item.media_type || getMediaType(item);
-    
-    // For both TV shows and movies, navigate to DetailScreen
-    navigation.navigate('DetailScreen', { 
-      mediaId: item.id, 
+
+    navigation.navigate('DetailScreen', {
+      mediaId: item.id,
       mediaType,
       title: mediaType === 'tv' ? item.name : item.title,
       poster_path: item.poster_path
@@ -64,19 +81,19 @@ const SearchScreen = ({ navigation }) => {
     const title = item.title || item.name || 'Unknown';
     const posterPath = item.poster_path;
     const backdropPath = item.backdrop_path;
-    
-    const imageSource = posterPath 
+
+    const imageSource = posterPath
       ? { uri: getImageUrl(posterPath) }
       : backdropPath
         ? { uri: getImageUrl(backdropPath) }
         : require('../../assets/placeholder.png');
 
-    const releaseYear = item.release_date || item.first_air_date 
+    const releaseYear = item.release_date || item.first_air_date
       ? new Date((item.release_date || item.first_air_date)).getFullYear()
       : '';
 
     const mediaType = item.media_type === 'tv' ? 'TV Show' : 'Movie';
-        
+
     return (
       <TouchableOpacity style={styles.resultItem} onPress={() => handleItemPress(item)}>
         <Image source={imageSource} style={styles.poster} />
@@ -98,48 +115,69 @@ const SearchScreen = ({ navigation }) => {
 
   return (
     <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#000" />
-      
-      <View style={styles.searchContainer}>
-        <Ionicons name="search" size={24} color="#888" style={styles.searchIcon} />
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Search movies & TV shows"
-          placeholderTextColor="#888"
-          value={query}
-          onChangeText={setQuery}
-          onSubmitEditing={handleSearch}
-          returnKeyType="search"
-          autoFocus
-          clearButtonMode="while-editing"
-        />
-      </View>
-      
-      {loading ? (
-        <View style={styles.centerContent}>
-          <ActivityIndicator size="large" color="#E50914" />
+      <Animated.View style={[styles.animatedContainer, animatedStyle]}>
+
+        <StatusBar barStyle="light-content" backgroundColor="#000" />
+
+        <View style={styles.header}>
+          <Text style={styles.headerTitle}>Search</Text>
         </View>
-      ) : noResults ? (
-        <View style={styles.centerContent}>
-          <Text style={styles.noResultsText}>No results found for "{query}"</Text>
+
+        <View style={styles.searchContainer}>
+          <Ionicons name="search" size={24} color="#888" style={styles.searchIcon} />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search movies & TV shows"
+            placeholderTextColor="#888"
+            value={query}
+            onChangeText={setQuery}
+            onSubmitEditing={handleSearch}
+            returnKeyType="search"
+            autoFocus
+            clearButtonMode="while-editing"
+          />
         </View>
-      ) : (
-        <FlatList
-          data={results}
-          renderItem={renderSearchResult}
-          keyExtractor={(item) => item.id.toString()}
-          contentContainerStyle={styles.resultsList}
-          ItemSeparatorComponent={() => <View style={styles.separator} />}
-        />
-      )}
+
+        {loading ? (
+          <View style={styles.centerContent}>
+            <ActivityIndicator size="large" color="#E50914" />
+          </View>
+        ) : noResults ? (
+          <View style={styles.centerContent}>
+            <Text style={styles.noResultsText}>No results found for "{query}"</Text>
+          </View>
+        ) : (
+          <FlatList
+            data={results}
+            renderItem={renderSearchResult}
+            keyExtractor={(item) => item.id.toString()}
+            contentContainerStyle={styles.resultsList}
+            ItemSeparatorComponent={() => <View style={styles.separator} />}
+          />
+        )}
+
+      </Animated.View>
     </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
+  animatedContainer: {
     flex: 1,
     backgroundColor: '#000',
+  },
+  container: {
+    flex: 1,
+  },
+  header: {
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 5,
+  },
+  headerTitle: {
+    color: '#fff',
+    fontSize: 24,
+    fontWeight: 'bold',
   },
   searchContainer: {
     flexDirection: 'row',
@@ -147,7 +185,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#222',
     borderRadius: 8,
     marginHorizontal: 16,
-    marginVertical: 12,
+    marginTop: 5,
+    marginBottom: 12,
     paddingHorizontal: 12,
   },
   searchIcon: {

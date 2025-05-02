@@ -20,11 +20,13 @@ const DetailScreen = ({ route, navigation }) => {
   const [selectedSeason, setSelectedSeason] = useState(1);
   const [seasonDetails, setSeasonDetails] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [displayedEpisodesCount, setDisplayedEpisodesCount] = useState(25); // State for displayed episodes count
 
   useEffect(() => {
     const fetchDetails = async () => {
       try {
         setLoading(true);
+        setDisplayedEpisodesCount(25); // Reset count on media change
         
         if (mediaType === 'tv') {
           // Fetch TV show details
@@ -35,6 +37,7 @@ const DetailScreen = ({ route, navigation }) => {
           if (mediaDetails.seasons && mediaDetails.seasons.length > 0) {
             const season = await fetchSeasonDetails(mediaId, 1);
             setSeasonDetails(season);
+            // No need to set displayedEpisodesCount here, it's reset above
           }
         } else {
           // Fetch movie details
@@ -55,11 +58,13 @@ const DetailScreen = ({ route, navigation }) => {
     try {
       setLoading(true);
       setSelectedSeason(seasonNumber);
+      setDisplayedEpisodesCount(25); // Reset count on season change
       const season = await fetchSeasonDetails(mediaId, seasonNumber);
       setSeasonDetails(season);
     } catch (error) {
       console.error('Error fetching season details:', error);
     } finally {
+      await (new Promise(resolve => setTimeout(resolve, 100))); // Give it some time to render images
       setLoading(false);
     }
   };
@@ -85,7 +90,18 @@ const DetailScreen = ({ route, navigation }) => {
     });
   };
 
-  if (loading || !details) {
+  const handleLoadMoreEpisodes = () => {
+    if (seasonDetails && seasonDetails.episodes) {
+      const newCount = Math.min(
+        displayedEpisodesCount + 50,
+        seasonDetails.episodes.length
+      );
+      setDisplayedEpisodesCount(newCount);
+    }
+  };
+
+  // Modify the condition: Only show full-screen loader on initial load
+  if (loading && !details) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#E50914" />
@@ -151,6 +167,10 @@ const DetailScreen = ({ route, navigation }) => {
   const genres = details.genres && details.genres.length > 0
     ? details.genres.map(genre => genre.name).join(', ')
     : '';
+
+  const episodesToShow = seasonDetails?.episodes?.slice(0, displayedEpisodesCount) || [];
+  const totalEpisodes = seasonDetails?.episodes?.length || 0;
+  const showLoadMoreButton = totalEpisodes > displayedEpisodesCount;
 
   return (
     <SafeAreaView style={styles.container}>
@@ -219,19 +239,39 @@ const DetailScreen = ({ route, navigation }) => {
             </View>
 
             <View style={styles.episodesContainer}>
-              {seasonDetails && seasonDetails.episodes && (
+              {/* Show loading indicator here if loading seasons AFTER initial details are loaded */}
+              {loading && details && (
+                <View style={styles.episodesLoadingContainer}>
+                  <ActivityIndicator size="small" color="#E50914" />
+                </View>
+              )}
+              {/* Hide episode list content while loading new season */}
+              {!loading && seasonDetails && seasonDetails.episodes && (
                 <>
                   <Text style={styles.sectionTitle}>
                     Season {selectedSeason} • {seasonDetails.episodes.length}{' '}
                     {seasonDetails.episodes.length === 1 ? 'Episode' : 'Episodes'}
                   </Text>
                   <FlatList
-                    data={seasonDetails.episodes}
+                    data={episodesToShow} // Use sliced data
                     keyExtractor={(item) => `episode-${item.id}`}
                     renderItem={renderEpisode}
-                    scrollEnabled={false}
+                    scrollEnabled={false} // Keep this false as it's inside a ScrollView
                   />
+                  {/* Load More Button */}
+                  {showLoadMoreButton && (
+                    <TouchableOpacity 
+                      style={styles.loadMoreButton} 
+                      onPress={handleLoadMoreEpisodes}
+                    >
+                      <Text style={styles.loadMoreButtonText}>Load More Episodes</Text>
+                    </TouchableOpacity>
+                  )}
                 </>
+              )}
+              {/* Handle case where season details might be null initially or after error */}
+              {!loading && !seasonDetails && (
+                 <Text style={styles.noEpisodesText}>No episodes found for this season.</Text>
               )}
             </View>
           </>
@@ -383,6 +423,13 @@ const styles = StyleSheet.create({
   },
   episodesContainer: {
     padding: 15,
+    minHeight: 100, // Ensure container has some height for the loader
+  },
+  episodesLoadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 20,
   },
   sectionTitle: {
     color: '#fff',
@@ -430,6 +477,24 @@ const styles = StyleSheet.create({
   episodeOverview: {
     color: '#888',
     fontSize: 12,
+  },
+  loadMoreButton: {
+    backgroundColor: '#333',
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 5,
+    alignItems: 'center',
+    marginTop: 15,
+  },
+  loadMoreButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
+  noEpisodesText: {
+    color: '#888',
+    textAlign: 'center',
+    marginTop: 20,
   },
   castSection: {
     padding: 15,

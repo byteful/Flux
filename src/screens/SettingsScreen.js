@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -12,6 +12,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
+import { useFocusEffect } from '@react-navigation/native';
+import Animated, { useSharedValue, useAnimatedStyle, withTiming } from 'react-native-reanimated';
 
 const THEME_KEY = 'app_theme';
 const AUTO_PLAY_KEY = 'auto_play';
@@ -21,25 +23,33 @@ const SettingsScreen = () => {
   const [autoPlayNext, setAutoPlayNext] = useState(true);
   const [loading, setLoading] = useState(true);
   const [watchHistory, setWatchHistory] = useState(0);
+  const opacity = useSharedValue(0); // Animated value
+
+  // Animated style
+  const animatedStyle = useAnimatedStyle(() => {
+    return {
+      opacity: opacity.value,
+    };
+  });
 
   useEffect(() => {
     // Load saved settings
     const loadSettings = async () => {
       try {
         setLoading(true);
-        
+
         // Load theme setting
         const themeSetting = await AsyncStorage.getItem(THEME_KEY);
         if (themeSetting !== null) {
           setDarkTheme(themeSetting === 'dark');
         }
-        
+
         // Load autoplay setting
         const autoPlaySetting = await AsyncStorage.getItem(AUTO_PLAY_KEY);
         if (autoPlaySetting !== null) {
           setAutoPlayNext(autoPlaySetting === 'true');
         }
-        
+
         // Get watch history count
         const watchDataString = await AsyncStorage.getItem('continueWatching');
         const watchData = watchDataString ? JSON.parse(watchDataString) : {};
@@ -50,10 +60,10 @@ const SettingsScreen = () => {
         setLoading(false);
       }
     };
-    
+
     loadSettings();
   }, []);
-  
+
   // Save theme setting
   const handleThemeToggle = async (value) => {
     try {
@@ -63,7 +73,7 @@ const SettingsScreen = () => {
       console.error('Error saving theme setting:', error);
     }
   };
-  
+
   // Save autoplay setting
   const handleAutoPlayToggle = async (value) => {
     try {
@@ -73,7 +83,7 @@ const SettingsScreen = () => {
       console.error('Error saving autoplay setting:', error);
     }
   };
-  
+
   // Clear watch history
   const handleClearHistory = () => {
     Alert.alert(
@@ -98,6 +108,16 @@ const SettingsScreen = () => {
     );
   };
 
+  useFocusEffect(
+    useCallback(() => {
+      opacity.value = 0; // Reset
+      opacity.value = withTiming(1, { duration: 300 }); // Fade in
+      return () => {
+        // Optional fade out
+      };
+    }, [opacity])
+  );
+
   if (loading) {
     return (
       <View style={[styles.container, styles.centered]}>
@@ -108,80 +128,87 @@ const SettingsScreen = () => {
 
   return (
     <SafeAreaView style={styles.container}>
-      <ScrollView>
-        <View style={styles.header}>
-          <Text style={styles.headerTitle}>Settings</Text>
-        </View>
-        
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Appearance</Text>
-          <View style={styles.setting}>
-            <View style={styles.settingInfo}>
-              <Ionicons name="moon" size={22} color="#888" style={styles.settingIcon} />
-              <Text style={styles.settingTitle}>Dark Theme</Text>
-            </View>
-            <Switch
-              value={darkTheme}
-              onValueChange={handleThemeToggle}
-              trackColor={{ false: '#444', true: '#E50914' }}
-              thumbColor="#fff"
-            />
+      <Animated.View style={[styles.animatedContainer, animatedStyle]}>
+        <ScrollView>
+          <View style={styles.header}>
+            <Text style={styles.headerTitle}>Settings</Text>
           </View>
-        </View>
-        
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Playback</Text>
-          <View style={styles.setting}>
-            <View style={styles.settingInfo}>
-              <Ionicons name="play-skip-forward" size={22} color="#888" style={styles.settingIcon} />
-              <Text style={styles.settingTitle}>Auto-play Next Episode</Text>
-            </View>
-            <Switch
-              value={autoPlayNext}
-              onValueChange={handleAutoPlayToggle}
-              trackColor={{ false: '#444', true: '#E50914' }}
-              thumbColor="#fff"
-            />
-          </View>
-        </View>
-        
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Data & Privacy</Text>
-          <View style={styles.dataInfo}>
-            <Ionicons name="time" size={22} color="#888" style={styles.settingIcon} />
-            <View style={styles.watchHistoryContainer}>
-              <Text style={styles.settingTitle}>Watch History</Text>
-              <Text style={styles.watchHistoryCount}>
-                {watchHistory} {watchHistory === 1 ? 'item' : 'items'}
-              </Text>
+
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Appearance</Text>
+            <View style={styles.setting}>
+              <View style={styles.settingInfo}>
+                <Ionicons name="moon" size={22} color="#888" style={styles.settingIcon} />
+                <Text style={styles.settingTitle}>Dark Theme</Text>
+              </View>
+              <Switch
+                value={darkTheme}
+                onValueChange={handleThemeToggle}
+                trackColor={{ false: '#444', true: '#E50914' }}
+                thumbColor="#fff"
+              />
             </View>
           </View>
-          
-          <TouchableOpacity style={styles.button} onPress={handleClearHistory}>
-            <Text style={styles.buttonText}>Clear Watch History</Text>
-          </TouchableOpacity>
-        </View>
-        
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>About</Text>
-          <View style={styles.infoItem}>
-            <Text style={styles.infoLabel}>Version</Text>
-            <Text style={styles.infoValue}>1.0.0</Text>
+
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Playback</Text>
+            <View style={styles.setting}>
+              <View style={styles.settingInfo}>
+                <Ionicons name="play-skip-forward" size={22} color="#888" style={styles.settingIcon} />
+                <Text style={styles.settingTitle}>Auto-play Next Episode</Text>
+              </View>
+              <Switch
+                value={autoPlayNext}
+                onValueChange={handleAutoPlayToggle}
+                trackColor={{ false: '#444', true: '#E50914' }}
+                thumbColor="#fff"
+              />
+            </View>
           </View>
-          <View style={styles.infoItem}>
-            <Text style={styles.infoLabel}>Build</Text>
-            <Text style={styles.infoValue}>2025.1</Text>
+
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Data & Privacy</Text>
+            <View style={styles.dataInfo}>
+              <Ionicons name="time" size={22} color="#888" style={styles.settingIcon} />
+              <View style={styles.watchHistoryContainer}>
+                <Text style={styles.settingTitle}>Watch History</Text>
+                <Text style={styles.watchHistoryCount}>
+                  {watchHistory} {watchHistory === 1 ? 'item' : 'items'}
+                </Text>
+              </View>
+            </View>
+
+            <TouchableOpacity style={styles.button} onPress={handleClearHistory}>
+              <Text style={styles.buttonText}>Clear Watch History</Text>
+            </TouchableOpacity>
           </View>
-        </View>
-      </ScrollView>
+
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>About</Text>
+            <View style={styles.infoItem}>
+              <Text style={styles.infoLabel}>Version</Text>
+              <Text style={styles.infoValue}>1.0.0</Text>
+            </View>
+            <View style={styles.infoItem}>
+              <Text style={styles.infoLabel}>Build</Text>
+              <Text style={styles.infoValue}>2025.1</Text>
+            </View>
+          </View>
+        </ScrollView>
+
+      </Animated.View>
     </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
+  animatedContainer: { // Add style for the animated wrapper
+    flex: 1,
+    backgroundColor: '#000', // Match screen background
+  },
   container: {
     flex: 1,
-    backgroundColor: '#000',
+    // backgroundColor: '#000', // Background is now on animatedContainer
   },
   centered: {
     justifyContent: 'center',

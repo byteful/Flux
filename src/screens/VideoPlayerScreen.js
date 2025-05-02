@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, StyleSheet, ActivityIndicator, BackHandler, Text, TouchableOpacity, Platform, PanResponder } from 'react-native';
+import { View, StyleSheet, ActivityIndicator, BackHandler, Text, TouchableOpacity, Platform, PanResponder, Animated, Easing } from 'react-native'; // Import Animated and Easing
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as ScreenOrientation from 'expo-screen-orientation';
+import * as Brightness from 'expo-brightness'; // Import Brightness
+import Slider from '@react-native-community/slider'; // Import Slider
 import { VideoView, useVideoPlayer } from 'expo-video';
 import { WebView } from 'react-native-webview';
 import { getStreamingUrl } from '../api/vidsrcApi';
-import { saveWatchProgress, getWatchProgress } from '../utils/storage';
+import { saveWatchProgress, getWatchProgress, getCachedStreamUrl, saveStreamUrl } from '../utils/storage'; // Import cache functions
 import { extractM3U8Stream } from '../utils/streamExtractor';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
@@ -14,6 +16,7 @@ import { useEventListener } from 'expo';
 const VideoPlayerScreen = ({ navigation, route }) => {
   const navigationRef = useRef(navigation);
   const progressBarRef = useRef(null);
+  const opacityAnim = useRef(new Animated.Value(0)).current; // Animated value for controls opacity
 
   const {
     mediaId,
@@ -28,7 +31,7 @@ const VideoPlayerScreen = ({ navigation, route }) => {
   const [isInitialLoading, setIsInitialLoading] = useState(true); // New state for initial load
   const [error, setError] = useState(null);
   const [streamExtractionComplete, setStreamExtractionComplete] = useState(false);
-  const [showControls, setShowControls] = useState(true);
+  const [showControls, setShowControls] = useState(false); // Start with controls hidden conceptually
   const [isPlaying, setIsPlaying] = useState(true);
   const [videoUrl, setVideoUrl] = useState(null);
   const [duration, setDuration] = useState(0);
@@ -38,6 +41,8 @@ const VideoPlayerScreen = ({ navigation, route }) => {
   const [webViewConfig, setWebViewConfig] = useState(null);
   const [retryAttempts, setRetryAttempts] = useState(0);
   const [isUnmounting, setIsUnmounting] = useState(false);
+  const [brightnessLevel, setBrightnessLevel] = useState(1); // State for brightness
+  const [hasBrightnessPermission, setHasBrightnessPermission] = useState(false); // State for permission
 
   const getStreamHeaders = () => {
     const headers = {
@@ -61,17 +66,77 @@ const VideoPlayerScreen = ({ navigation, route }) => {
     ? `tv-${mediaId}-s${season}-e${episode}`
     : `movie-${mediaId}`;
 
+  // --- Animation and Controls Timer ---
   const startControlsTimer = () => {
     if (controlsTimer) {
       clearTimeout(controlsTimer);
     }
-
     const timerId = setTimeout(() => {
-      setShowControls(false);
-    }, 3000);
-
+      setShowControls(false); // Trigger fade-out via useEffect
+    }, 5000); // 5 seconds inactivity timeout
     setControlsTimer(timerId);
   };
+
+  useEffect(() => {
+    // Animate controls based on showControls state
+    if (showControls) {
+      Animated.timing(opacityAnim, {
+        toValue: 1,
+        duration: 300, // Fade-in duration
+        easing: Easing.in(Easing.ease), // Ease-in curve
+        useNativeDriver: true,
+      }).start();
+      startControlsTimer(); // Start inactivity timer when controls are shown
+    } else {
+      Animated.timing(opacityAnim, {
+        toValue: 0,
+        duration: 500, // Fade-out duration
+        easing: Easing.out(Easing.ease), // Ease-out curve
+        useNativeDriver: true,
+      }).start();
+      if (controlsTimer) {
+        clearTimeout(controlsTimer); // Clear timer when hiding controls explicitly
+        setControlsTimer(null);
+      }
+    }
+    // Cleanup timer on unmount or if showControls changes again before timer fires
+    return () => {
+      if (controlsTimer) {
+        clearTimeout(controlsTimer);
+      }
+    };
+  }, [showControls, opacityAnim]); // Rerun effect when showControls changes
+
+  const toggleControls = () => {
+    // If controls are currently shown, tapping hides them immediately.
+    // If controls are hidden, tapping shows them (and starts the timer via useEffect).
+    setShowControls(currentShowControls => !currentShowControls);
+  };
+  // --- End Animation and Controls Timer ---
+
+
+  // --- Brightness Handling ---
+  useEffect(() => {
+    (async () => {
+      const { status } = await Brightness.requestPermissionsAsync();
+      if (status === 'granted') {
+        setHasBrightnessPermission(true);
+        const initialBrightness = await Brightness.getSystemBrightnessAsync();
+        setBrightnessLevel(initialBrightness);
+      } else {
+        // Handle permission denied? Maybe show a message or disable slider.
+        console.log('Brightness permission denied');
+      }
+    })();
+  }, []);
+
+  const handleBrightnessChange = async (value) => {
+    if (!hasBrightnessPermission) return;
+    setBrightnessLevel(value);
+    await Brightness.setSystemBrightnessAsync(value);
+    setShowControls(true); // Show controls and reset timer on interaction
+  };
+  // --- End Brightness Handling ---
 
   // --- Listener Handlers ---
   const handlePositionChange = (event) => {
@@ -111,8 +176,8 @@ const VideoPlayerScreen = ({ navigation, route }) => {
       if (status.isLoaded && !status.isBuffering) {
          if (loading) setLoading(false); // Stop general loading indicator
          if (isInitialLoading) setIsInitialLoading(false); // Mark initial load complete
-      } else if (status.isBuffering && !loading) {
-         setLoading(true); // Show buffering indicator
+      } else if (status.isBuffering && !loading && isPlaying) { // Check isPlaying before setting loading
+         setLoading(true); // Show buffering indicator only if supposed to be playing
       }
     } else if (typeof status === 'string') {
       if (status === 'readyToPlay') {
@@ -123,8 +188,8 @@ const VideoPlayerScreen = ({ navigation, route }) => {
              // console.log("Player status readyToPlay, current player.duration:", currentDuration);
              handleDurationChange(currentDuration);
          }
-      } else if (status === 'loading' && !loading) {
-         setLoading(true); // Show buffering indicator (might be initial or subsequent)
+      } else if (status === 'loading' && !loading && isPlaying) { // Check isPlaying before setting loading
+         setLoading(true); // Show buffering indicator only if supposed to be playing
       }
     }
   });
@@ -188,13 +253,20 @@ const VideoPlayerScreen = ({ navigation, route }) => {
   }, [player, videoUrl, resumeTime, isUnmounting]);
 
   useEffect(() => {
+    let isMounted = true; // Track mount status for async operations
+    setIsUnmounting(false); // Reset unmounting flag on mount/rerender
+
     const setOrientation = async () => {
       try {
+        // Ensure orientation is set on every mount/reload triggered by retryAttempts
         await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
       } catch (e) {
         // console.error("Failed to lock orientation:", e);
       }
     };
+
+    // Call setOrientation directly here to ensure it runs on reload
+    setOrientation();
 
     const checkSavedProgress = async () => {
       try {
@@ -208,26 +280,31 @@ const VideoPlayerScreen = ({ navigation, route }) => {
     };
 
     const setupStreamExtraction = () => {
+      // console.log(`Setting up stream extraction for ${contentId}`);
       const config = extractM3U8Stream(
         mediaId,
         mediaType,
         season,
         episode,
         (streamUrl) => {
-          if (streamExtractionComplete || videoUrl || isUnmounting) return;
+          // Check mount status before updating state
+          if (!isMounted || streamExtractionComplete || videoUrl) return;
 
           const processedUrl = Platform.OS === 'ios'
             ? streamUrl.replace('http://', 'https://')
             : streamUrl;
 
+          // console.log(`Stream found for ${contentId}, saving to cache and setting URL.`);
+          saveStreamUrl(contentId, processedUrl); // Save to cache
           setVideoUrl(processedUrl);
           setStreamExtractionComplete(true);
         },
         (err) => {
-          if (isUnmounting) return;
+          // Check mount status before updating state
+          if (!isMounted) return;
           // console.error("Error extracting stream:", err);
           setError({ message: "Could not extract video stream. Retry or check your connection." });
-          setStreamExtractionComplete(true);
+          setStreamExtractionComplete(true); // Mark as complete even on error
           setLoading(false);
           setIsInitialLoading(false); // Stop initial loading on extraction error
         }
@@ -236,11 +313,27 @@ const VideoPlayerScreen = ({ navigation, route }) => {
       setWebViewConfig(config);
     };
 
-    setOrientation();
-    checkSavedProgress();
-    setupStreamExtraction();
+    const initializePlayer = async () => {
+      // await setOrientation(); // Moved outside
+      await checkSavedProgress();
 
-    startControlsTimer();
+      // Check cache first
+      const cachedUrl = await getCachedStreamUrl(contentId);
+      if (cachedUrl && isMounted) {
+        // console.log(`Using cached URL for ${contentId}: ${cachedUrl}`);
+        setVideoUrl(cachedUrl);
+        setStreamExtractionComplete(true);
+        // No need to call setupStreamExtraction
+      } else if (isMounted) {
+        // console.log(`No valid cache found for ${contentId}, starting extraction.`);
+        // Only setup extraction if no cached URL is found
+        setupStreamExtraction();
+      }
+    };
+
+    initializePlayer();
+
+    setShowControls(true); // Show controls initially
 
     const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
       handleGoBack();
@@ -248,11 +341,14 @@ const VideoPlayerScreen = ({ navigation, route }) => {
     });
 
     return () => {
-      setIsUnmounting(true);
+      isMounted = false; // Mark as unmounted
+      setIsUnmounting(true); // Set unmounting flag for other listeners/effects
 
       try {
+        // Use the position state directly for saving
         saveProgress(position);
 
+        // ... rest of cleanup code ...
         if (player && typeof player.pause === 'function') {
           try {
             player.pause();
@@ -273,23 +369,28 @@ const VideoPlayerScreen = ({ navigation, route }) => {
         // console.error("Cleanup error:", e);
       }
     };
-  }, [navigation, contentId, mediaId, mediaType, season, episode, retryAttempts]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navigation, contentId, mediaId, mediaType, season, episode, retryAttempts]); // Keep dependencies, add retryAttempts
 
   const saveProgress = (currentTime) => {
-    if (isUnmounting || !currentTime) return;
+    // Use isUnmounting flag instead of checking player state directly in cleanup
+    if (!currentTime || !duration || duration <= 0) return; // Added duration check and ensure it's positive
 
+    // console.log(`Attempting to save progress: ${currentTime} / ${duration}`);
     try {
       const data = {
         title: title,
         episodeTitle: episodeTitle,
         mediaType: mediaType,
-        mediaId: mediaId,
+        mediaId: mediaId, // Use the original mediaId
         position: currentTime,
+        duration: duration, // Save duration
         poster_path: route.params.poster_path,
         season: season,
         episode: episode,
+        lastWatched: new Date().toISOString(),
       };
-
+      // Use contentId which is unique per episode/movie
       saveWatchProgress(contentId, data);
     } catch (e) {
       // console.error("Error saving progress:", e);
@@ -307,7 +408,7 @@ const VideoPlayerScreen = ({ navigation, route }) => {
         }
         setIsPlaying(!isPlaying);
       }
-      startControlsTimer();
+      setShowControls(true); // Show controls and reset timer on interaction
     } catch (error) {
       // console.error('Error toggling play/pause:', error);
     }
@@ -318,7 +419,7 @@ const VideoPlayerScreen = ({ navigation, route }) => {
       if (player) {
         player.seekBy(-10);
       }
-      startControlsTimer();
+      setShowControls(true); // Show controls and reset timer on interaction
     } catch (error) {
       // console.error('Error seeking backward:', error);
     }
@@ -329,18 +430,13 @@ const VideoPlayerScreen = ({ navigation, route }) => {
       if (player) {
         player.seekBy(10);
       }
-      startControlsTimer();
+      setShowControls(true); // Show controls and reset timer on interaction
     } catch (error) {
       // console.error('Error seeking forward:', error);
     }
   };
 
-  const toggleControls = () => {
-    setShowControls(!showControls);
-    if (!showControls) {
-      startControlsTimer();
-    }
-  };
+  // toggleControls is defined above near animation logic
 
   const handleGoBack = () => {
     if (isUnmounting) return;
@@ -396,12 +492,18 @@ const VideoPlayerScreen = ({ navigation, route }) => {
   };
 
   const handleReload = async () => {
+    // console.log("Reload triggered");
     try {
       setError(null);
       setLoading(true);
       setIsInitialLoading(true); // Reset initial loading state on reload
       setStreamExtractionComplete(false);
-      setVideoUrl(null); // This will trigger the videoUrl useEffect
+      setVideoUrl(null); // Clear current video URL
+      setWebViewConfig(null); // Clear webview config
+      setResumeTime(0); // Reset resume time
+      setPosition(0); // Reset position
+      setDuration(0); // Reset duration
+      // Increment retryAttempts to trigger the main useEffect re-run
       setRetryAttempts(prevAttempts => prevAttempts + 1);
     } catch (error) {
       // console.error('Error reloading video:', error);
@@ -456,7 +558,7 @@ const VideoPlayerScreen = ({ navigation, route }) => {
       }
 
       // Reset the timer for controls
-      startControlsTimer();
+      setShowControls(true); // Show controls and reset timer on interaction
     });
   };
   
@@ -474,12 +576,14 @@ const VideoPlayerScreen = ({ navigation, route }) => {
       }
       // Seek to the touch position - don't update state immediately
       seekToPosition(evt.nativeEvent, false);
+      setShowControls(true); // Keep controls visible during drag
     },
 
     // Handle drag movement
     onPanResponderMove: (evt) => {
       // Seek and update state immediately for visual feedback during drag
       seekToPosition(evt.nativeEvent, true);
+      setShowControls(true); // Keep controls visible during drag
     },
 
     // Handle release of touch/drag
@@ -489,9 +593,15 @@ const VideoPlayerScreen = ({ navigation, route }) => {
         player.play();
       }
       // Let the player's position listener handle the final state update
-      startControlsTimer();
+      setShowControls(true); // Reset timer after interaction ends
     }
   });
+
+  const injectedJavaScript = `
+    (function() {
+      window.alert = function() {};
+    })();
+  `;
 
   return (
     <View style={styles.container}>
@@ -511,6 +621,7 @@ const VideoPlayerScreen = ({ navigation, route }) => {
             incognito={true}
             thirdPartyCookiesEnabled={false}
             onShouldStartLoadWithRequest={() => true}
+            injectedJavaScriptBeforeContentLoaded={injectedJavaScript}
           />
         </View>
       )}
@@ -531,12 +642,12 @@ const VideoPlayerScreen = ({ navigation, route }) => {
         </View>
       )}
 
-      {/* Buffering Indicator (shows only after initial load) */}
+      {/* Buffering Indicator (shows only after initial load)
       {loading && !isInitialLoading && (
         <View style={styles.bufferingIndicatorContainer}>
           <ActivityIndicator size="small" color="#FFF" />
         </View>
-      )}
+      )} */}
 
       {/* Error Display */}
       {error && (
@@ -579,12 +690,14 @@ const VideoPlayerScreen = ({ navigation, route }) => {
         activeOpacity={1}
       />
 
-      {/* Controls */}
-      {showControls && (
-        <>
-          <SafeAreaView style={styles.controlsContainer}>
-            <TouchableOpacity onPress={handleGoBack} style={styles.backButton}>
-              <Ionicons name="arrow-back" size={24} color="white" />
+      {/* Controls Wrapper for Animation */}
+      {/* Use pointerEvents="box-none" to allow taps on children but pass through empty areas */}
+      <Animated.View style={[styles.controlsWrapper, { opacity: opacityAnim, pointerEvents: 'box-none' }]}>
+        {/* Top Controls */}
+        {/* Remove pointerEvents override, default 'auto' is fine */}
+        <SafeAreaView style={styles.controlsContainer}>
+          <TouchableOpacity onPress={handleGoBack} style={styles.backButton}>
+            <Ionicons name="arrow-back" size={24} color="white" />
             </TouchableOpacity>
 
             <View style={styles.titleContainer}>
@@ -594,6 +707,23 @@ const VideoPlayerScreen = ({ navigation, route }) => {
               </Text>
             </View>
           </SafeAreaView>
+
+          {/* Brightness Slider (Vertical on the left) */}
+          {hasBrightnessPermission && (
+            <View style={styles.brightnessSliderContainer}>
+              <Ionicons name="sunny" size={20} color="white" style={styles.brightnessIcon} />
+              <Slider
+                style={styles.brightnessSlider}
+                minimumValue={0}
+                maximumValue={1}
+                value={brightnessLevel}
+                onValueChange={handleBrightnessChange} // Use onValueChange for continuous update
+                minimumTrackTintColor="#FFFFFF"
+                maximumTrackTintColor="rgba(255, 255, 255, 0.3)"
+                thumbTintColor="transparent"
+              />
+            </View>
+          )}
 
           <View style={styles.centerControls}>
             <TouchableOpacity style={styles.seekButton} onPress={seekBackward}>
@@ -629,8 +759,7 @@ const VideoPlayerScreen = ({ navigation, route }) => {
             </View>
             <Text style={styles.timeText}>{formatTime(duration)}</Text>
           </SafeAreaView>
-        </>
-      )}
+      </Animated.View>
     </View>
   );
 };
@@ -651,7 +780,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#000',
   },
   loaderContainer: {
-    ...StyleSheet.absoluteFill,
+    ...StyleSheet.absoluteFillObject,
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: '#000', // Keep background for initial load
@@ -680,7 +809,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0, 0, 0, 0.6)', // Semi-transparent background
   },
   errorContainer: {
-    ...StyleSheet.absoluteFill,
+    ...StyleSheet.absoluteFillObject,
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: '#000',
@@ -703,15 +832,32 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 20,
     borderRadius: 5,
+    marginBottom: 10, // Added margin
   },
   retryButtonText: {
     color: '#fff',
   },
-  overlayTouchable: {
-    ...StyleSheet.absoluteFill,
-    backgroundColor: 'transparent',
+  goBackButton: {
+    backgroundColor: '#555',
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 5,
+    // marginLeft: 15, // Removed margin, let it stack vertically
   },
-  controlsContainer: {
+  goBackButtonText: {
+    color: '#fff',
+  },
+  overlayTouchable: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'transparent',
+    zIndex: 1, // Ensure it's above the video but below controls
+  },
+  controlsWrapper: { // New wrapper for all controls to apply animation
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 5, // Ensure controls are above the overlay touchable
+    // backgroundColor: 'rgba(255, 0, 0, 0.1)', // For debugging layout
+  },
+  controlsContainer: { // Top controls (Back button, Title)
     position: 'absolute',
     top: 0,
     left: 0,
@@ -720,7 +866,7 @@ const styles = StyleSheet.create({
     padding: 10,
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
     alignItems: 'center',
-    zIndex: 5,
+    // zIndex: 5, // zIndex managed by controlsWrapper
   },
   backButton: {
     padding: 8,
@@ -734,11 +880,36 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: 'bold',
   },
+  brightnessSliderContainer: {
+    position: 'absolute',
+    left: 40, // Increased left offset
+    top: '20%',
+    bottom: '20%',
+    width: 40,
+    justifyContent: 'center', // Center items vertically in the column
+    alignItems: 'center', // Center items horizontally
+    // Removed backgroundColor and borderRadius
+    // zIndex: 6, // zIndex managed by controlsWrapper
+    // paddingVertical: 10, // Removed vertical padding, adjust spacing with margins
+  },
+  brightnessIcon: {
+    marginBottom: 55, // Increased space between icon and slider
+  },
+  brightnessSlider: {
+    width: 150,
+    height: 30,
+    transform: [{ rotate: '-90deg' }]
+  },
   centerControls: {
-    ...StyleSheet.absoluteFill,
+    position: 'absolute', // Use absolute positioning within the wrapper
+    top: 0,             // Cover the whole area
+    left: 0,
+    right: 0,
+    bottom: 0,
     justifyContent: 'center',
     alignItems: 'center',
     flexDirection: 'row',
+    // zIndex: 5, // zIndex managed by controlsWrapper
   },
   playPauseButton: {
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
@@ -761,6 +932,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
     paddingHorizontal: 20,
     paddingVertical: 10,
+    // zIndex: 5, // zIndex managed by controlsWrapper
   },
   progressBar: {
     flex: 1,
@@ -768,8 +940,8 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 255, 255, 0.3)',
     marginHorizontal: 10,
     borderRadius: 2,
-    overflow: 'visible',
-    zIndex: 1,
+    overflow: 'visible', // Keep visible for touch area
+    // zIndex: 1, // Relative zIndex within bottomControls is fine
   },
   progressFill: {
     height: '100%',
@@ -778,24 +950,15 @@ const styles = StyleSheet.create({
   },
   progressTouchArea: {
     position: 'absolute',
-    height: 20,
+    height: 20, // Make touch area larger than visual bar
     width: '100%',
-    top: -8,
-    backgroundColor: 'transparent',
+    top: -8, // Center touch area vertically over the bar
+    backgroundColor: 'transparent', // Make touch area invisible
+    zIndex: 2, // Ensure touch area is clickable over the bar fill
   },
   timeText: {
     color: '#fff',
     fontSize: 14,
-  },
-  goBackButton: {
-    backgroundColor: '#555',
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    borderRadius: 5,
-    marginLeft: 15,
-  },
-  goBackButtonText: {
-    color: '#fff',
   },
 });
 

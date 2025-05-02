@@ -1,6 +1,6 @@
 import React from 'react';
-import { NavigationContainer } from '@react-navigation/native';
-import { createStackNavigator } from '@react-navigation/stack';
+import { NavigationContainer, DarkTheme } from '@react-navigation/native'; // Import DarkTheme
+import { createStackNavigator, CardStyleInterpolators } from '@react-navigation/stack'; // Import CardStyleInterpolators
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
 import { View, Text } from 'react-native';
@@ -22,11 +22,19 @@ const MainStack = () => {
       screenOptions={{
         headerStyle: {
           backgroundColor: '#000',
+          // Remove potential border if it exists
+          borderBottomWidth: 0,
+          shadowOpacity: 0, // Remove shadow as well
+          elevation: 0, // Android shadow
         },
         headerTintColor: '#fff',
         headerTitleStyle: {
           fontWeight: 'bold',
         },
+        // Use a simple fade animation for all transitions in this stack
+        cardStyleInterpolator: CardStyleInterpolators.forFadeFromBottomAndroid,
+        // Ensure card background is black during transitions
+        cardStyle: { backgroundColor: '#000' },
       }}
     >
       <Stack.Screen 
@@ -44,6 +52,7 @@ const MainStack = () => {
         component={DetailScreen}
         options={({ route }) => ({
           title: route.params?.title || 'Details',
+          headerBackTitle: 'Back', // Add this line
         })}
       />
     </Stack.Navigator>
@@ -55,6 +64,8 @@ const MainTabs = () => {
   return (
     <Tab.Navigator
       screenOptions={{
+        // Disable the header for all tab screens
+        headerShown: false, 
         tabBarStyle: { 
           backgroundColor: '#000',
           borderTopColor: '#222',
@@ -64,10 +75,11 @@ const MainTabs = () => {
         tabBarLabelStyle: {
           fontSize: 12,
         },
-        headerStyle: {
-          backgroundColor: '#000',
-        },
-        headerTintColor: '#fff',
+        // headerStyle and headerTintColor are no longer needed here
+        // headerStyle: {
+        //   backgroundColor: '#000',
+        // },
+        // headerTintColor: '#fff',
       }}
     >
       <Tab.Screen 
@@ -103,7 +115,8 @@ const MainTabs = () => {
 
 const AppNavigator = () => {
   return (
-    <NavigationContainer>
+    // Use the DarkTheme to ensure consistent background
+    <NavigationContainer theme={DarkTheme}>
       <MainStack />
     </NavigationContainer>
   );
