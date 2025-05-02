@@ -23,7 +23,7 @@ The application is entirely client-side, meaning no backend server is required f
 
 ## Demo 🎥
 
-
+https://github.com/user-attachments/assets/725196be-83ae-4b81-be00-90f0dbb7a05e
 
 ## Getting Started 🚀
 
