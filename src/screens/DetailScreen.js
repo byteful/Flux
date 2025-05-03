@@ -11,8 +11,9 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
-import { fetchTVShowDetails, fetchSeasonDetails, fetchMovieDetails, getImageUrl } from '../api/tmdbApi';
+import { fetchTVShowDetails, fetchSeasonDetails, fetchMovieDetails, getImageUrl, fetchMovieRecommendations } from '../api/tmdbApi';
 import { Ionicons } from '@expo/vector-icons';
+import MediaCard from '../components/MediaCard';
 
 const DetailScreen = ({ route, navigation }) => {
   const { mediaId, mediaType, title } = route.params;
@@ -21,11 +22,14 @@ const DetailScreen = ({ route, navigation }) => {
   const [seasonDetails, setSeasonDetails] = useState(null);
   const [loading, setLoading] = useState(true);
   const [displayedEpisodesCount, setDisplayedEpisodesCount] = useState(25); // State for displayed episodes count
+  const [recommendations, setRecommendations] = useState([]); // State for recommendations
+  const [loadingRecommendations, setLoadingRecommendations] = useState(false); // State for recommendation loading
 
   useEffect(() => {
     const fetchDetails = async () => {
       try {
         setLoading(true);
+        setRecommendations([]); // Reset recommendations
         setDisplayedEpisodesCount(25); // Reset count on media change
         
         if (mediaType === 'tv') {
@@ -43,9 +47,16 @@ const DetailScreen = ({ route, navigation }) => {
           // Fetch movie details
           const mediaDetails = await fetchMovieDetails(mediaId);
           setDetails(mediaDetails);
+          // Fetch movie recommendations AFTER details are fetched
+          setLoadingRecommendations(true);
+          const recs = await fetchMovieRecommendations(mediaId);
+          setRecommendations(recs);
+          setLoadingRecommendations(false);
         }
       } catch (error) {
         console.error('Error fetching details:', error);
+        // Ensure loading states are reset on error
+        setLoadingRecommendations(false);
       } finally {
         setLoading(false);
       }
@@ -100,6 +111,18 @@ const DetailScreen = ({ route, navigation }) => {
     }
   };
 
+  // Handler for pressing a recommended item
+  const handleRecommendationPress = (item) => {
+    // Navigate to the DetailScreen for the recommended item
+    // Determine mediaType based on presence of title/name if not explicitly available
+    const recommendedMediaType = item.media_type || (item.title ? 'movie' : 'tv'); 
+    navigation.push('Detail', { // Use push to allow navigating to another detail screen
+      mediaId: item.id,
+      mediaType: recommendedMediaType,
+      title: recommendedMediaType === 'movie' ? item.title : item.name,
+    });
+  };
+
   // Modify the condition: Only show full-screen loader on initial load
   if (loading && !details) {
     return (
@@ -151,6 +174,15 @@ const DetailScreen = ({ route, navigation }) => {
     </TouchableOpacity>
   );
   
+  const renderRecommendation = ({ item }) => (
+    <MediaCard 
+      item={item} 
+      onPress={() => handleRecommendationPress(item)} 
+      // Add specific styling for recommendations if needed, or use default MediaCard style
+      style={styles.recommendationCard} 
+    />
+  );
+
   const displayTitle = mediaType === 'tv' ? details.name : details.title;
   const releaseDate = mediaType === 'tv' ? details.first_air_date : details.release_date;
   const releaseYear = releaseDate ? releaseDate.split('-')[0] : 'Unknown';
@@ -173,12 +205,12 @@ const DetailScreen = ({ route, navigation }) => {
   const showLoadMoreButton = totalEpisodes > displayedEpisodesCount;
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={[]}>
       <ScrollView showsVerticalScrollIndicator={false}>
         <View style={styles.headerContainer}>
           {details.backdrop_path ? (
             <Image
-              source={{ uri: getImageUrl(details.backdrop_path) }}
+              source={{ uri: getImageUrl(details.backdrop_path, 'w780') }} // Use a larger image size if available
               style={styles.backdropImage}
               resizeMode="cover"
             />
@@ -186,7 +218,8 @@ const DetailScreen = ({ route, navigation }) => {
             <View style={styles.backdropPlaceholder} />
           )}
           <LinearGradient
-            colors={['transparent', 'rgba(0,0,0,0.8)', '#000']}
+            // Make gradient start higher and be stronger at the bottom
+            colors={['transparent', 'rgba(0,0,0,0.6)', '#000']}
             style={styles.gradient}
           />
           <View style={styles.headerContent}>
@@ -214,16 +247,20 @@ const DetailScreen = ({ route, navigation }) => {
             
             {genres ? <Text style={styles.genres}>{genres}</Text> : null}
             
-            <Text style={styles.overview}>{details.overview}</Text>
-            
-            {/* Play button for movies */}
+            {/* Play button for movies - MOVED HERE */}
             {mediaType === 'movie' && (
               <TouchableOpacity style={styles.playButton} onPress={handlePlayMovie}>
-                <Ionicons name="play" size={18} color="#fff" />
+                <Ionicons name="play" size={18} color="#000" />
                 <Text style={styles.playButtonText}>Play</Text>
               </TouchableOpacity>
             )}
+            {/* Overview removed from here */}
           </View>
+        </View>
+
+        {/* Overview Section */}
+        <View style={styles.overviewContainer}>
+          <Text style={styles.overview}>{details.overview}</Text>
         </View>
 
         {/* TV Show-specific content */}
@@ -231,10 +268,10 @@ const DetailScreen = ({ route, navigation }) => {
           <>
             <View style={styles.seasonsContainer}>
               <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                {details.seasons && Array.from(
-                  { length: details.number_of_seasons },
-                  (_, i) => renderSeasonButton(i + 1)
-                )}
+                {details.seasons && details.seasons
+                  .filter(season => season.season_number > 0) // Filter out "Specials" (Season 0)
+                  .map(season => renderSeasonButton(season.season_number))
+                }
               </ScrollView>
             </View>
 
@@ -278,30 +315,54 @@ const DetailScreen = ({ route, navigation }) => {
         )}
         
         {/* Movie-specific content */}
-        {mediaType === 'movie' && details.credits && (
-          <View style={styles.castSection}>
-            <Text style={styles.sectionTitle}>Cast</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.castScrollView}>
-              {details.credits.cast && details.credits.cast.slice(0, 10).map(actor => (
-                <View key={`actor-${actor.id}`} style={styles.castMember}>
-                  {actor.profile_path ? (
-                    <Image 
-                      source={{ uri: getImageUrl(actor.profile_path) }}
-                      style={styles.castImage}
-                    />
-                  ) : (
-                    <View style={styles.castImagePlaceholder}>
-                      <Text style={styles.castPlaceholderText}>
-                        {actor.name.charAt(0)}
-                      </Text>
+        {mediaType === 'movie' && (
+          <>
+            {/* Cast Section */}
+            {details.credits && details.credits.cast && details.credits.cast.length > 0 && (
+              <View style={styles.castSection}>
+                <Text style={styles.sectionTitle}>Cast</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.castScrollView}>
+                  {details.credits.cast.slice(0, 15).map(actor => (
+                    <View key={`actor-${actor.id}`} style={styles.castMember}>
+                      {actor.profile_path ? (
+                        <Image 
+                          source={{ uri: getImageUrl(actor.profile_path) }}
+                          style={styles.castImage}
+                        />
+                      ) : (
+                        <View style={styles.castImagePlaceholder}>
+                          <Ionicons name="person" size={30} color="#666" />
+                        </View>
+                      )}
+                      <Text style={styles.castName} numberOfLines={1}>{actor.name}</Text>
+                      <Text style={styles.castCharacter} numberOfLines={1}>{actor.character}</Text>
                     </View>
-                  )}
-                  <Text style={styles.castName} numberOfLines={1}>{actor.name}</Text>
-                  <Text style={styles.castCharacter} numberOfLines={1}>{actor.character}</Text>
-                </View>
-              ))}
-            </ScrollView>
-          </View>
+                  ))}
+                </ScrollView>
+              </View>
+            )}
+
+            {/* Recommendations Section */}
+            {recommendations.length > 0 && (
+              <View style={styles.recommendationsSection}>
+                <Text style={styles.sectionTitle}>More Like This</Text>
+                <FlatList
+                  horizontal
+                  data={recommendations}
+                  renderItem={renderRecommendation}
+                  keyExtractor={(item) => `rec-${item.id}`}
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.recommendationsList}
+                />
+              </View>
+            )}
+            {/* Optional: Show loading indicator for recommendations */}
+            {loadingRecommendations && (
+              <View style={styles.loadingRecommendationsContainer}>
+                <ActivityIndicator size="small" color="#E50914" />
+              </View>
+            )}
+          </>
         )}
       </ScrollView>
     </SafeAreaView>
@@ -321,17 +382,17 @@ const styles = StyleSheet.create({
   },
   headerContainer: {
     position: 'relative',
-    height: 300,
+    height: 400, // Increased height
   },
   backdropImage: {
     width: '100%',
-    height: 300,
+    height: 400, // Increased height
     position: 'absolute',
   },
   backdropPlaceholder: {
     width: '100%',
-    height: 300,
-    backgroundColor: '#333',
+    height: 400, // Increased height
+    backgroundColor: '#1a1a1a', // Darker placeholder
     position: 'absolute',
   },
   gradient: {
@@ -339,91 +400,107 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    height: 300,
+    height: 400, // Match container height
   },
   headerContent: {
-    padding: 20,
+    padding: 15, // Consistent padding
     position: 'absolute',
-    bottom: 0,
+    bottom: 20, // Position content higher
     left: 0,
     right: 0,
   },
   title: {
     color: '#fff',
-    fontSize: 24,
+    fontSize: 28, // Larger title
     fontWeight: 'bold',
-    marginBottom: 10,
+    marginBottom: 8,
   },
   infoRow: {
     flexDirection: 'row',
-    marginBottom: 10,
+    alignItems: 'center', // Align items vertically
+    marginBottom: 12,
   },
   rating: {
-    color: '#FFC107',
-    marginRight: 15,
+    color: '#4CAF50', // Green rating color
+    marginRight: 12,
+    fontWeight: 'bold',
   },
   year: {
     color: '#aaa',
-    marginRight: 15,
+    marginRight: 12,
+    fontSize: 14,
   },
   seasons: {
     color: '#aaa',
+    fontSize: 14,
+    marginRight: 12,
   },
   runtime: {
     color: '#aaa',
+    fontSize: 14,
   },
   genres: {
-    color: '#aaa',
-    marginBottom: 10,
+    color: '#ccc', // Slightly brighter genres
+    fontSize: 14,
+    marginBottom: 16, // More space before play button
+    lineHeight: 20,
+  },
+  // New Overview Section Style
+  overviewContainer: {
+    paddingHorizontal: 15,
+    paddingVertical: 10, // Add vertical padding
   },
   overview: {
     color: '#ccc',
     fontSize: 14,
-    lineHeight: 20,
+    lineHeight: 21, // Slightly increased line height
   },
   playButton: {
-    backgroundColor: '#E50914',
-    paddingVertical: 12,
-    paddingHorizontal: 24,
-    borderRadius: 4,
+    backgroundColor: '#fff', // White play button like Netflix
+    paddingVertical: 10, // Slightly smaller padding
+    paddingHorizontal: 20,
+    borderRadius: 5, // Slightly rounded corners
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 16,
-    alignSelf: 'flex-start',
+    marginTop: 0, // Removed top margin as it's positioned differently
+    alignSelf: 'flex-start', // Keep it left-aligned
+    maxWidth: 150, // Limit width
   },
   playButtonText: {
-    color: '#fff',
+    color: '#000', // Black text on white button
     fontSize: 16,
     fontWeight: 'bold',
-    marginLeft: 6,
+    marginLeft: 8, // Space icon and text
   },
   seasonsContainer: {
-    padding: 10,
+    paddingHorizontal: 15, // Match other padding
+    paddingVertical: 10,
     borderBottomWidth: 1,
     borderBottomColor: '#222',
   },
   seasonButton: {
     paddingVertical: 8,
-    paddingHorizontal: 16,
-    marginRight: 10,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: '#444',
+    paddingHorizontal: 16, // Adjust padding
+    marginRight: 10, // Adjust spacing
+    borderRadius: 15, // More rounded buttons
+    backgroundColor: '#333', // Default background
+    borderWidth: 0, // Remove border
   },
   selectedSeasonButton: {
-    backgroundColor: '#E50914',
-    borderColor: '#E50914',
+    backgroundColor: '#E50914', // Keep red for selected
   },
   seasonButtonText: {
     color: '#fff',
+    fontSize: 14, // Slightly larger text
   },
   selectedSeasonText: {
     fontWeight: 'bold',
   },
   episodesContainer: {
-    padding: 15,
-    minHeight: 100, // Ensure container has some height for the loader
+    paddingHorizontal: 15, // Match padding
+    paddingBottom: 15, // Add bottom padding
+    minHeight: 100,
   },
   episodesLoadingContainer: {
     flex: 1,
@@ -436,7 +513,7 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: 'bold',
     marginBottom: 15,
-    marginLeft: 10,
+    paddingHorizontal: 15, // Add horizontal padding to section titles
   },
   episodeItem: {
     marginBottom: 15,
@@ -446,45 +523,51 @@ const styles = StyleSheet.create({
   },
   episodeRow: {
     flexDirection: 'row',
+    alignItems: 'center', // Align items vertically
   },
   episodeImage: {
-    width: 130,
-    height: 80,
+    width: 120, // Slightly smaller image
+    height: 70,
     borderRadius: 4,
+    marginRight: 12, // Add margin to the right
   },
   episodeImagePlaceholder: {
-    width: 130,
-    height: 80,
+    width: 120,
+    height: 70,
     backgroundColor: '#333',
     borderRadius: 4,
+    marginRight: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   episodeInfo: {
     flex: 1,
-    marginLeft: 10,
+    // marginLeft: 10, // Removed margin
     justifyContent: 'center',
   },
   episodeNumber: {
     color: '#aaa',
-    fontSize: 12,
-    marginBottom: 2,
+    fontSize: 13, // Slightly larger
+    marginBottom: 3,
   },
   episodeTitle: {
     color: '#fff',
-    fontSize: 16,
+    fontSize: 15, // Slightly smaller
     fontWeight: '600',
-    marginBottom: 5,
+    marginBottom: 4,
   },
   episodeOverview: {
     color: '#888',
-    fontSize: 12,
+    fontSize: 13, // Slightly larger
+    lineHeight: 18,
   },
   loadMoreButton: {
     backgroundColor: '#333',
-    paddingVertical: 12,
+    paddingVertical: 10, // Adjust padding
     paddingHorizontal: 20,
     borderRadius: 5,
     alignItems: 'center',
-    marginTop: 15,
+    marginTop: 10, // Adjust margin
   },
   loadMoreButtonText: {
     color: '#fff',
@@ -495,48 +578,68 @@ const styles = StyleSheet.create({
     color: '#888',
     textAlign: 'center',
     marginTop: 20,
+    fontSize: 14,
   },
   castSection: {
-    padding: 15,
-    borderTopWidth: 1,
-    borderTopColor: '#222',
+    paddingHorizontal: 15,
+    paddingVertical: 15,
+    // Removed borderTop, let recommendations add it if needed
   },
   castScrollView: {
-    paddingVertical: 10,
+    paddingTop: 10, // Add padding top
   },
   castMember: {
-    width: 100,
-    marginRight: 15,
+    width: 90, // Adjust width
+    marginRight: 12, // Adjust spacing
     alignItems: 'center',
   },
   castImage: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    marginBottom: 8,
+    width: 70, // Smaller image
+    height: 70,
+    borderRadius: 35, // Keep circular
+    marginBottom: 6, // Adjust spacing
+    backgroundColor: '#333', // Background for loading/error
   },
   castImagePlaceholder: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: '#444',
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    backgroundColor: '#2a2a2a', // Darker placeholder
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 8,
+    marginBottom: 6,
   },
-  castPlaceholderText: {
-    color: '#fff',
-    fontSize: 24,
+  castPlaceholderText: { // Removed, using Icon now
+    // ...
   },
   castName: {
     color: '#fff',
     fontSize: 13,
     textAlign: 'center',
+    marginTop: 2, // Add margin top
   },
   castCharacter: {
     color: '#888',
-    fontSize: 12,
+    fontSize: 11, // Smaller character name
     textAlign: 'center',
+  },
+  // Recommendations Styles
+  recommendationsSection: {
+    paddingVertical: 15,
+    borderTopWidth: 1, // Add separator line above recommendations
+    borderTopColor: '#222',
+  },
+  recommendationsList: {
+    paddingHorizontal: 15, // Add padding to the container
+  },
+  recommendationCard: {
+    marginRight: 10, // Space between recommendation cards
+    width: 110, // Adjust width as needed
+    // Add any specific styling overrides for MediaCard in this context
+  },
+  loadingRecommendationsContainer: {
+    paddingVertical: 20,
+    alignItems: 'center',
   },
 });
 

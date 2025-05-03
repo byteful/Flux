@@ -45,7 +45,7 @@ const MainStack = () => {
       <Stack.Screen 
         name="VideoPlayer" 
         component={VideoPlayerScreen} 
-        options={{ headerShown: false }}
+        options={{ headerShown: false, autoHideHomeIndicator: true }}
       />
       <Stack.Screen 
         name="DetailScreen" 

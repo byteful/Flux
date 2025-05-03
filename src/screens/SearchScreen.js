@@ -114,7 +114,7 @@ const SearchScreen = ({ navigation }) => {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={["top"]}>
       <Animated.View style={[styles.animatedContainer, animatedStyle]}>
 
         <StatusBar barStyle="light-content" backgroundColor="#000" />

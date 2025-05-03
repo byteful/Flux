@@ -8,6 +8,7 @@ import {
   Alert, // Import Alert
   Text, // Import Text
 } from 'react-native';
+import * as ScreenOrientation from 'expo-screen-orientation'; // Import ScreenOrientation
 import { useNavigation, useFocusEffect } from '@react-navigation/native'; // Add useFocusEffect
 import Animated, { useSharedValue, useAnimatedStyle, withTiming } from 'react-native-reanimated'; // Import reanimated components
 import {
@@ -176,6 +177,9 @@ const HomeScreen = () => {
   useFocusEffect(
     useCallback(() => {
       // Reset opacity to 0 initially in case we navigate back quickly
+// Lock orientation to portrait when HomeScreen gains focus
+      ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP)
+        .catch(e => console.warn("Failed to lock HomeScreen orientation:", e));
       opacity.value = 0;
       // Start the animation
       opacity.value = withTiming(1, { duration: 300 }); // Fade in over 300ms
@@ -294,7 +298,7 @@ const HomeScreen = () => {
   }
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={["top"]}>
       <Animated.View style={[styles.animatedContainer, animatedStyle]}>
 
         {/* Add Header */}

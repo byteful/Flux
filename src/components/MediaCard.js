@@ -98,6 +98,11 @@ const MediaCard = ({
               S{item.season}:E{item.episode}
             </Text>
           )}
+          {item.mediaType === 'movie' && (
+            <Text style={styles.episodeText} numberOfLines={1}>
+              {item.title}
+            </Text>
+          )}
           {progress > 0 && (
             <View style={styles.progressBarContainer}>
               <View style={[styles.progressBarFill, { width: `${progress * 100}%` }]} />

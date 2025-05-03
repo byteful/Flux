@@ -24,10 +24,11 @@ const FeaturedContent = ({ item, onPlay, onInfoPress }) => {
         resizeMode="cover" // Ensure image covers the area
       >
         <LinearGradient
-          // Adjust gradient to be less intrusive if needed
-          colors={['transparent', 'rgba(0,0,0,0.6)', 'rgba(0,0,0,0.9)']}
+          // Gradient similar to Netflix style
+          colors={['transparent', 'transparent', 'rgba(0,0,0,0.8)', 'rgba(0,0,0,1)']}
           style={styles.gradient}
         >
+          {/* Remove background from content container, rely on gradient */}
           <View style={styles.contentContainer}>
             <Text style={styles.title}>{title}</Text>
             <Text style={styles.overview} numberOfLines={3}> {/* Allow more lines for overview */}
@@ -87,7 +88,7 @@ const styles = StyleSheet.create({
   },
   contentContainer: {
     alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.3)', // Slight background for text readability
+    // Removed background color to rely on the gradient
     borderRadius: 10,
     padding: 15,
     width: '100%',

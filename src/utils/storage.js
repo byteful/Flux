@@ -2,17 +2,19 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const CONTINUE_WATCHING_KEY = 'continueWatching';
 const STREAM_CACHE_KEY = 'streamCache'; // New key for stream cache
-const CACHE_EXPIRATION_MS = 1 * 60 * 60 * 1000; // 1 hour expiration
+const CACHE_EXPIRATION_MS = 3 * 24 * 60 * 60 * 1000; // 3 days expiration
+const AUTO_PLAY_KEY = 'autoPlayEnabled'; // Key for auto-play setting
 
 // Save progress for a movie or TV show episode
-export const saveWatchProgress = async (contentId, data) => { // Changed mediaId to contentId
+export const saveWatchProgress = async (mediaId, data) => { // Use mediaId (show/movie ID) as the key
   try {
     const watchDataString = await AsyncStorage.getItem(CONTINUE_WATCHING_KEY);
     const watchData = watchDataString ? JSON.parse(watchDataString) : {};
     
-    watchData[contentId] = { // Use contentId as key
-      ...data,
-      lastWatched: new Date().toISOString(),
+    // Use mediaId as the key to ensure only one entry per show/movie
+    watchData[mediaId] = {
+      ...data, // This data includes specific episode details
+      lastWatched: new Date().toISOString(), // Update timestamp
     };
     
     await AsyncStorage.setItem(CONTINUE_WATCHING_KEY, JSON.stringify(watchData));
@@ -23,12 +25,12 @@ export const saveWatchProgress = async (contentId, data) => { // Changed mediaId
   }
 };
 
-// Get progress for a specific movie or TV show episode
-export const getWatchProgress = async (contentId) => { // Changed mediaId to contentId
+// Get progress for a specific movie or TV show (returns the last watched episode's data)
+export const getWatchProgress = async (mediaId) => { // Use mediaId (show/movie ID)
   try {
     const watchDataString = await AsyncStorage.getItem(CONTINUE_WATCHING_KEY);
     const watchData = watchDataString ? JSON.parse(watchDataString) : {};
-    return watchData[contentId] || null; // Use contentId as key
+    return watchData[mediaId] || null; // Use mediaId as key
   } catch (error) {
     console.error('Error getting watch progress:', error);
     return null;
@@ -41,11 +43,11 @@ export const getContinueWatchingList = async () => {
     const watchDataString = await AsyncStorage.getItem(CONTINUE_WATCHING_KEY);
     const watchData = watchDataString ? JSON.parse(watchDataString) : {};
     
-    // The key in watchData is the contentId
+    // The key in watchData is now the mediaId
     return Object.entries(watchData)
-      .map(([id, data]) => ({ // id here is the contentId
-        id, // Keep the contentId as 'id' in the returned object
-        ...data,
+      .map(([mediaId, data]) => ({ // id here is the mediaId
+        id: mediaId, // Keep the mediaId as 'id' in the returned object
+        ...data, // data contains the last watched episode details
       }))
       .sort((a, b) => {
         return new Date(b.lastWatched) - new Date(a.lastWatched);
@@ -56,13 +58,13 @@ export const getContinueWatchingList = async () => {
   }
 };
 
-// Clear a specific item from continue watching
-export const removeFromContinueWatching = async (contentId) => { // Changed mediaId to contentId
+// Clear a specific show/movie from continue watching
+export const removeFromContinueWatching = async (mediaId) => { // Use mediaId (show/movie ID)
   try {
     const watchDataString = await AsyncStorage.getItem(CONTINUE_WATCHING_KEY);
     const watchData = watchDataString ? JSON.parse(watchDataString) : {};
     
-    delete watchData[contentId]; // Use contentId as key
+    delete watchData[mediaId]; // Use mediaId as key
     await AsyncStorage.setItem(CONTINUE_WATCHING_KEY, JSON.stringify(watchData));
     return true;
   } catch (error) {
@@ -130,6 +132,31 @@ export const clearStreamCache = async () => {
   }
 };
 
+// --- Auto Play Setting ---
+
+// Save the auto-play setting
+export const saveAutoPlaySetting = async (isEnabled) => {
+  try {
+    await AsyncStorage.setItem(AUTO_PLAY_KEY, JSON.stringify(isEnabled));
+    return true;
+  } catch (error) {
+    console.error('Error saving auto-play setting:', error);
+    return false;
+  }
+};
+
+// Get the auto-play setting
+export const getAutoPlaySetting = async () => {
+  try {
+    const settingString = await AsyncStorage.getItem(AUTO_PLAY_KEY);
+    // Default to false if not set
+    return settingString ? JSON.parse(settingString) : false;
+  } catch (error) {
+    console.error('Error getting auto-play setting:', error);
+    return false; // Default to false on error
+  }
+};
+
 export default {
   saveWatchProgress,
   getWatchProgress,
@@ -138,4 +165,6 @@ export default {
   saveStreamUrl, // Export new function
   getCachedStreamUrl, // Export new function
   clearStreamCache, // Export new function
+  saveAutoPlaySetting, // Export new function
+  getAutoPlaySetting, // Export new function
 };

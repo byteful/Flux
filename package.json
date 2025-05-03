@@ -10,7 +10,6 @@
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "^2.1.2",
-    "@react-native-community/masked-view": "^0.1.11",
     "@react-native-community/slider": "^4.5.6",
     "@react-navigation/bottom-tabs": "^7.3.10",
     "@react-navigation/native": "^7.1.6",
@@ -23,7 +22,9 @@
     "expo-screen-orientation": "^8.0.4",
     "expo-secure-store": "^14.0.1",
     "expo-status-bar": "~2.0.1",
+    "expo-system-ui": "~4.0.9",
     "expo-video": "~2.0.6",
+    "parse-srt": "^1.0.0-alpha",
     "react": "18.3.1",
     "react-native": "0.76.9",
     "react-native-gesture-handler": "^2.25.0",

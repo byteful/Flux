@@ -193,6 +193,27 @@ export const fetchMediaByGenre = async (mediaType, genreId, params = {}) => {
   }
 };
 
+// Fetch recommendations for a specific movie
+export const fetchMovieRecommendations = async (movieId) => {
+  try {
+    const response = await axios.get(`${BASE_URL}/movie/${movieId}/recommendations`, {
+      params: {
+        api_key: TMDB_API_KEY,
+        // Optional: Add language, page, etc. if needed
+        // watch_region: US_REGION, // Recommendations might be broader, consider if filtering is needed
+        // with_watch_providers: US_PROVIDERS_STRING, // Apply provider filter if desired
+      },
+    });
+    // Filter out results without a poster_path for better UI presentation
+    const filteredResults = response.data.results.filter(item => item.poster_path);
+    return filteredResults;
+  } catch (error) {
+    console.error(`Error fetching recommendations for movie ${movieId}:`, error);
+    // Don't throw, just return empty array or handle differently if needed
+    return []; 
+  }
+};
+
 export default {
   fetchPopularMovies,
   fetchPopularTVShows,
@@ -205,4 +226,5 @@ export default {
   fetchRecommendedMovies,
   fetchRecommendedTVShows,
   fetchMediaByGenre,
+  fetchMovieRecommendations, // Add the new function here
 };
