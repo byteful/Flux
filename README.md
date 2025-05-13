@@ -2,6 +2,9 @@
 
 Flux is a cross-platform mobile video streaming application built with React Native and Expo for iOS and Android.
 
+> [!TIP]
+> **To sideload this app, go to https://flux.byteful.me**
+
 ## Overview
 
 Flux provides a seamless experience for browsing and watching movies and TV shows. It leverages the power of the **TMDB API** for rich metadata (summaries, posters, ratings, etc.) and integrates with the **Vidsrc API** to fetch streamable video links.
