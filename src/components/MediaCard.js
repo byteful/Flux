@@ -5,16 +5,16 @@ import ImagePlaceholder from './ImagePlaceholder';
 import { Ionicons } from '@expo/vector-icons';
 
 const { width } = Dimensions.get('window');
-const FOOTER_HEIGHT = 45; // Approximate height for the footer section
+const FOOTER_HEIGHT = 45;
 
-const MediaCard = ({ 
-  item, 
-  onPress, 
-  onInfoPress, 
-  onRemovePress, 
-  width: customWidth, 
-  height: customImageHeight, // Renamed height to customImageHeight
-  isContinueWatching = false 
+const MediaCard = ({
+  item,
+  onPress,
+  onInfoPress,
+  onRemovePress,
+  width: customWidth,
+  height: customImageHeight,
+  isContinueWatching = false
 }) => {
   const [imageError, setImageError] = useState(false);
   const cardWidth = customWidth || styles.defaultCardWidth;
@@ -77,15 +77,13 @@ const MediaCard = ({
 
           {isContinueWatching && (
             <View style={styles.playOverlay}>
-              {/* Background Circle */}
               <View style={styles.playButtonBackground} />
-              {/* Outline Icon */}
-              <Ionicons 
-                name="play-circle-outline" 
-                size={90} 
-                color="#FFFFFF" 
-                style={styles.playIcon} // Added style for potential positioning adjustments
-              /> 
+              <Ionicons
+                name="play-circle-outline"
+                size={90}
+                color="#FFFFFF"
+                style={styles.playIcon}
+              />
             </View>
           )}
         </View>
@@ -128,22 +126,21 @@ const defaultHeight = defaultWidth * 1.5;
 const styles = StyleSheet.create({
   defaultCardWidth: defaultWidth,
   defaultImageHeight: defaultHeight,
-  outerContainer: { // New container for card + footer
+  outerContainer: {
     marginHorizontal: 4,
-    marginBottom: 5, // Add some bottom margin
-    backgroundColor: '#111', // Background for the whole card area
+    marginBottom: 5,
+    backgroundColor: '#111',
     borderRadius: 4,
     overflow: 'hidden',
   },
-  touchableContainer: { // Container for the touchable image part
-    // No specific styles needed here now
+  touchableContainer: {
   },
-  imageContainer: { // Container for the image and play overlay
+  imageContainer: {
     width: '100%',
-    backgroundColor: '#222', // Background for placeholder
-    position: 'relative', // Needed for absolute positioning of play overlay
-    overflow: 'hidden', // Ensure image corners are rounded if outer container has borderRadius
-    borderTopLeftRadius: 4, // Match outer container radius
+    backgroundColor: '#222',
+    position: 'relative',
+    overflow: 'hidden',
+    borderTopLeftRadius: 4,
     borderTopRightRadius: 4,
   },
   image: {
@@ -154,38 +151,35 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     justifyContent: 'center',
     alignItems: 'center',
-    // Remove background from the main overlay
-    // backgroundColor: 'rgba(0, 0, 0, 0.4)', 
   },
   playButtonBackground: {
-    width: 48 * 1.5, // Slightly smaller than the icon size
+    width: 48 * 1.5,
     height: 48 * 1.5,
-    borderRadius: 24 * 1.5, // Make it a circle
-    backgroundColor: 'rgba(0, 0, 0, 0.7)', // Semi-transparent black
-    position: 'absolute', // Position behind the icon
+    borderRadius: 24 * 1.5,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    position: 'absolute',
   },
   playIcon: {
-    // Add if needed for fine-tuning position, e.g., elevation on Android
   },
-  footerContainer: { // Container for elements below the image
+  footerContainer: {
     paddingHorizontal: 8,
     paddingTop: 5,
     paddingBottom: 5,
-    minHeight: FOOTER_HEIGHT, // Ensure minimum height
-    justifyContent: 'center', // Center content vertically if needed
+    minHeight: FOOTER_HEIGHT,
+    justifyContent: 'center',
   },
   episodeText: {
-    color: '#AAA', // Lighter color for episode text
+    color: '#AAA',
     fontSize: 11,
     fontWeight: 'bold',
-    textAlign: 'left', // Align left
+    textAlign: 'left',
     marginBottom: 4,
   },
   progressBarContainer: {
     height: 3,
     backgroundColor: 'rgba(255, 255, 255, 0.3)',
     borderRadius: 1.5,
-    marginBottom: 6, // Space between progress bar and footer actions
+    marginBottom: 6,
   },
   progressBarFill: {
     height: '100%',
@@ -198,7 +192,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   iconButton: {
-    padding: 3, // Slightly larger touch area
+    padding: 3,
   },
 });
 

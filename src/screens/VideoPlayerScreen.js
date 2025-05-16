@@ -1,21 +1,23 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { View, StyleSheet, ActivityIndicator, BackHandler, Text, TouchableOpacity, Platform, PanResponder, Animated, Easing, Modal, FlatList } from 'react-native'; // Added Modal, FlatList
+import { View, StyleSheet, ActivityIndicator, BackHandler, Text, TouchableOpacity, Platform, PanResponder, Animated, Easing, Modal, FlatList, Dimensions, AppState } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useFocusEffect, useNavigation } from '@react-navigation/native'; // Import useNavigation
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import * as ScreenOrientation from 'expo-screen-orientation';
-import * as SystemUI from 'expo-system-ui'; // Import SystemUI
-import * as Brightness from 'expo-brightness'; // Import Brightness
-import Slider from '@react-native-community/slider'; // Import Slider
+import * as SystemUI from 'expo-system-ui';
+import * as Brightness from 'expo-brightness';
+import Slider from '@react-native-community/slider';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import { WebView } from 'react-native-webview';
-import { fetchTVShowDetails, fetchSeasonDetails } from '../api/tmdbApi'; // Correct the import name AND add fetchSeasonDetails
-import { saveWatchProgress, getWatchProgress, getCachedStreamUrl, saveStreamUrl, getAutoPlaySetting } from '../utils/storage'; // Import getAutoPlaySetting
+import { fetchTVShowDetails, fetchSeasonDetails } from '../api/tmdbApi';
+import { saveWatchProgress, getWatchProgress, getCachedStreamUrl, saveStreamUrl, getAutoPlaySetting } from '../utils/storage';
 import { extractM3U8Stream } from '../utils/streamExtractor';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import { useEventListener } from 'expo';
-import parseSrt from 'parse-srt'; // Added subtitle parser
-import { searchSubtitles, downloadSubtitle } from '../api/opensubtitlesApi'; // Added OpenSubtitles API functions
+import parseSrt from 'parse-srt';
+import { searchSubtitles, downloadSubtitle } from '../api/opensubtitlesApi';
+import { GestureHandlerRootView, GestureDetector, Gesture } from 'react-native-gesture-handler';
+import { runOnJS } from 'react-native-reanimated';
 
 // Constants for auto-play
 const AUTO_PLAY_COUNTDOWN_SECONDS = 10; // Kept for reference, though countdown UI is removed
@@ -43,6 +45,13 @@ const VideoPlayerScreen = ({ route }) => {
     episodeTitle,
     poster_path // Ensure poster_path is passed for next episode data
   } = route.params;
+
+  // --- Pinch to Zoom States ---
+  const [isZoomed, setIsZoomed] = useState(false); // Restored original setter
+  const [videoNaturalSize, setVideoNaturalSize] = useState(null);
+  const [screenDimensions, setScreenDimensions] = useState(Dimensions.get('window'));
+  const animatedScale = useRef(new Animated.Value(1)).current;
+  // --- End Pinch to Zoom States ---
 
   // ... existing states ...
   const [loading, setLoading] = useState(true);
@@ -164,11 +173,11 @@ const VideoPlayerScreen = ({ route }) => {
         controlsTimerRef.current = null;
       }
     };
-  }, [showControls, opacityAnim]); // Removed startControlsTimer dependency again
+  }, [showControls, opacityAnim, startControlsTimer]);
 
   const toggleControls = () => {
     // Removed check for autoPlayCountdownActive and cancelAutoPlay call
-    logSetShowControls(currentShowControls => !currentShowControls); // Use logger
+    setShowControls(currentShowControls => !currentShowControls);
   };
   // --- End Animation and Controls Timer ---
 
@@ -182,17 +191,46 @@ const VideoPlayerScreen = ({ route }) => {
         setHasBrightnessPermission(true);
         const initialBrightness = await Brightness.getSystemBrightnessAsync();
         setBrightnessLevel(initialBrightness);
-      } else {
-        console.log('Brightness permission denied');
       }
     })();
-  }, []);
+
+    const handleAppStateChange = async (nextAppState) => {
+      if (nextAppState === 'active') {
+        // It's important to read hasBrightnessPermission from its latest state.
+        // Since hasBrightnessPermission is in the dependency array of this useEffect,
+        // this function will be recreated if hasBrightnessPermission changes.
+        // However, to be absolutely sure we have the latest value if the permission
+        // was granted *after* this effect initially ran but *before* app state changed,
+        // we could re-check permission here or rely on the effect's dependencies.
+        // For now, relying on the dependency array.
+        if (hasBrightnessPermission) {
+          try {
+            const currentBrightness = await Brightness.getSystemBrightnessAsync();
+            console.log('[Brightness] System brightness on resume:', currentBrightness);
+            setBrightnessLevel(currentBrightness); // Update our UI
+          } catch (e) {
+            console.error('[Brightness] Error fetching brightness on resume:', e);
+          }
+        } else {
+          console.log('[Brightness] No permission to get brightness on resume (permission state was false).');
+          // Optionally, try to request permission again or inform the user.
+          // For now, just logging.
+        }
+      }
+    };
+
+    const subscription = AppState.addEventListener('change', handleAppStateChange);
+
+    return () => {
+      subscription.remove();
+    };
+  }, [hasBrightnessPermission]); // Re-run if hasBrightnessPermission changes
 
   const handleBrightnessChange = async (value) => {
     if (!hasBrightnessPermission) return;
     setBrightnessLevel(value);
     await Brightness.setSystemBrightnessAsync(value);
-    logSetShowControls(true); // Use logger: Show controls and reset timer on interaction
+    setShowControls(true); // Show controls and reset timer on interaction
     // Removed cancelAutoPlay call
   };
   // --- End Brightness Handling ---
@@ -500,7 +538,7 @@ const VideoPlayerScreen = ({ route }) => {
 
   const toggleSubtitles = () => {
     setSubtitlesEnabled(prev => !prev);
-    logSetShowControls(true); // Keep controls visible
+    setShowControls(true); // Keep controls visible
   };
 
 
@@ -615,11 +653,8 @@ const VideoPlayerScreen = ({ route }) => {
   useEventListener(player, 'statusChange', (event) => {
     const status = event?.status ?? event; // Get status first
 
-    // Log ALL status changes to see what's happening
-    // console.log("[Status Debug] statusChange:", status); // Re-commented verbose logging
-
     if (isUnmounting) {
-      console.log("[AutoPlay Debug] statusChange ignored: isUnmounting=true");
+      // console.log("[AutoPlay Debug] statusChange ignored: isUnmounting=true"); // Kept for auto-play debugging if needed
       return;
     }
 
@@ -631,6 +666,22 @@ const VideoPlayerScreen = ({ route }) => {
         if (isInitialLoading) setIsInitialLoading(false);
       } else if (status.isBuffering && !loading && isPlaying) {
         setLoading(true);
+      }
+
+      // Extract naturalSize for zoom calculations
+      if (status.naturalSize) {
+        const { width: nw, height: nh, orientation: no } = status.naturalSize;
+        let newNaturalSize = { width: nw, height: nh };
+        // Handle potential orientation mismatch in reported naturalSize
+        if (no === 'landscape' && nw < nh) {
+          newNaturalSize = { width: nh, height: nw };
+        } else if (no === 'portrait' && nw > nh) {
+          newNaturalSize = { width: nh, height: nw };
+        }
+
+        if (!videoNaturalSize || newNaturalSize.width !== videoNaturalSize.width || newNaturalSize.height !== videoNaturalSize.height) {
+          setVideoNaturalSize(newNaturalSize);
+        }
       }
       // --- End Auto-play on Finish ---
     } else if (typeof status === 'string') {
@@ -802,11 +853,11 @@ const VideoPlayerScreen = ({ route }) => {
       }
 
       // Find subtitles after getting media info
-      findSubtitles();
+      // findSubtitles();
     };
 
     initializePlayer();
-    logSetShowControls(true); // Use logger: Show controls initially
+    setShowControls(true); // Show controls initially
 
     const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
       handleGoBack();
@@ -845,7 +896,7 @@ const VideoPlayerScreen = ({ route }) => {
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [navigation, contentId, mediaId, mediaType, season, episode, retryAttempts]); // Keep dependencies
+  }, [navigation, contentId, mediaId, mediaType, season, episode, retryAttempts, player]); // Added player
   // --- End Main Setup Effect ---
 
   // --- Save Progress ---
@@ -893,7 +944,7 @@ const VideoPlayerScreen = ({ route }) => {
         }
         // setIsPlaying(!isPlaying); // State updated by listener
       }
-      logSetShowControls(true); // Use logger
+      setShowControls(true);
     } catch (error) {
       console.error('Error toggling play/pause:', error);
     }
@@ -905,7 +956,7 @@ const VideoPlayerScreen = ({ route }) => {
         player.seekBy(-10);
         // Removed cancelAutoPlay call
       }
-      logSetShowControls(true); // Use logger
+      setShowControls(true);
     } catch (error) {
       console.error('Error seeking backward:', error);
     }
@@ -917,7 +968,7 @@ const VideoPlayerScreen = ({ route }) => {
         player.seekBy(10);
         // Removed cancelAutoPlay call
       }
-      logSetShowControls(true); // Use logger
+      setShowControls(true);
     } catch (error) {
       console.error('Error seeking forward:', error);
     }
@@ -1032,11 +1083,11 @@ const VideoPlayerScreen = ({ route }) => {
         player.pause();
       }
       updateSeekPreview(evt.nativeEvent);
-      logSetShowControls(true); // Use logger
+      setShowControls(true);
     },
     onPanResponderMove: (evt) => {
       updateSeekPreview(evt.nativeEvent);
-      logSetShowControls(true); // Use logger
+      setShowControls(true);
     },
     onPanResponderRelease: (evt, gestureState) => {
       const seekTarget = seekPreviewPosition; // Capture value before resetting
@@ -1062,7 +1113,7 @@ const VideoPlayerScreen = ({ route }) => {
       if (player && isPlaying) { // Check original isPlaying state before grant
         player.play();
       }
-      logSetShowControls(true); // Use logger: Reset controls timer
+      setShowControls(true); // Reset controls timer
     }
   });
   // --- End Seek Handling ---
@@ -1070,6 +1121,93 @@ const VideoPlayerScreen = ({ route }) => {
   const injectedJavaScript = `
     (function() { window.alert = function() {}; })();
   `;
+
+  // --- Pinch to Zoom Logic ---
+  const onLayoutRootView = useCallback((event) => {
+    const { width, height } = event.nativeEvent.layout;
+    if (screenDimensions.width !== width || screenDimensions.height !== height) {
+      setScreenDimensions({ width, height });
+    }
+  }, [screenDimensions]);
+
+  useEffect(() => {
+    if (!videoNaturalSize || !screenDimensions) {
+      if (!isZoomed) { // Ensure scale is 1 if not zoomed and info is missing
+        Animated.timing(animatedScale, {
+          toValue: 1,
+          duration: 300,
+          easing: Easing.out(Easing.ease),
+          useNativeDriver: true,
+        }).start();
+      }
+      return;
+    }
+
+    const { width: videoWidth, height: videoHeight } = videoNaturalSize;
+    const { width: screenWidth, height: screenHeight } = screenDimensions;
+
+    let targetScaleValue = 1;
+    if (isZoomed) {
+      if (videoWidth > 0 && videoHeight > 0 && screenWidth > 0 && screenHeight > 0) {
+        const videoAspectRatio = videoWidth / videoHeight;
+        const screenAspectRatio = screenWidth / screenHeight;
+
+        // If aspect ratios are very similar, effectively no zoom needed for "fill"
+        if (Math.abs(videoAspectRatio - screenAspectRatio) < 0.01) {
+          targetScaleValue = 1;
+        } else if (videoAspectRatio > screenAspectRatio) { // Video is wider than screen container
+          targetScaleValue = (screenHeight / screenWidth) * videoAspectRatio;
+        } else { // Video is narrower or same aspect ratio
+          targetScaleValue = (screenWidth / screenHeight) / videoAspectRatio;
+        }
+        targetScaleValue = Math.max(1, targetScaleValue); // Ensure scale is at least 1
+      } else {
+        targetScaleValue = 1.5; // Fallback zoom scale
+      }
+    }
+
+    Animated.timing(animatedScale, {
+      toValue: targetScaleValue,
+      duration: 300,
+      easing: Easing.out(Easing.ease),
+      useNativeDriver: true,
+    }).start();
+  }, [isZoomed, videoNaturalSize, screenDimensions, animatedScale]);
+
+  // --- Combined Gestures for Tap and Pinch ---
+  const tapToToggleControls = Gesture.Tap()
+    .maxDuration(250) // Optional: to distinguish from long press, etc.
+    .onEnd((_event, success) => {
+      if (success) {
+        runOnJS(toggleControls)(); // Ensure toggleControls (which calls setShowControls) runs on JS thread
+      }
+    });
+
+  const pinchToZoom = Gesture.Pinch()
+    .onEnd((event) => {
+      if (event.scale > 1.1) { // Pinching outwards
+        if (!isZoomed) {
+          setIsZoomed(true);
+        }
+      } else if (event.scale < 0.9) { // Pinching inwards
+        if (isZoomed) {
+          setIsZoomed(false);
+        }
+      }
+      // Ensure controls are visible and timer is reset after a pinch
+      if (!showControls) {
+        setShowControls(true); // This will also trigger startControlsTimer via useEffect
+      } else {
+        startControlsTimer(); // If controls already shown, just reset the timer
+      }
+    });
+
+  // Use Gesture.Race to ensure only one gesture (tap or pinch) is active at a time.
+  // Pinch typically involves more movement, so it might naturally win if both start.
+  // If a simple tap occurs, tapToToggleControls will activate.
+  // If a pinch occurs, pinchToZoom will activate.
+  const videoAreaGestures = Gesture.Race(pinchToZoom, tapToToggleControls);
+  // --- End Pinch to Zoom Logic ---
 
   // --- Render ---
 
@@ -1144,8 +1282,9 @@ const VideoPlayerScreen = ({ route }) => {
   };
 
   return (
-    <View style={styles.container}>
-      <StatusBar hidden />
+    <GestureHandlerRootView style={styles.gestureHandlerRoot}>
+      <View style={styles.container} onLayout={onLayoutRootView}>
+        <StatusBar hidden />
 
       {/* Hidden WebView */}
       {webViewConfig && !streamExtractionComplete && (
@@ -1198,12 +1337,23 @@ const VideoPlayerScreen = ({ route }) => {
 
       {/* Video Player */}
       {videoUrl && (
-        <VideoView
-          player={player}
-          style={styles.video}
-          nativeControls={false}
-          allowsPictureInPicture={true}
-        />
+        <GestureDetector gesture={videoAreaGestures}>
+          <Animated.View
+            style={[
+              styles.video, // This style should make the Animated.View fill the available video area.
+              { transform: [{ scale: animatedScale }] }
+            ]}
+          >
+            <VideoView
+              player={player}
+              style={StyleSheet.absoluteFill} // VideoView fills the scaled Animated.View
+              nativeControls={false}
+              allowsPictureInPicture={true}
+              resizeMode="contain" // Base resize mode is contain
+              // pointerEvents="none" // Prevent VideoView from interfering with gestures on parent Animated.View
+            />
+          </Animated.View>
+        </GestureDetector>
       )}
 
       {/* Subtitle Text Display */}
@@ -1217,12 +1367,14 @@ const VideoPlayerScreen = ({ route }) => {
       {/* Black Transparent Overlay */}
       <Animated.View style={[styles.overlayBackground, { opacity: opacityAnim }]} pointerEvents="none" />
 
-      {/* Overlay Touchable */}
+      {/* Overlay Touchable - REMOVED as tap is now handled by GestureDetector */}
+      {/*
       <TouchableOpacity
         style={styles.overlayTouchable}
         onPress={toggleControls}
         activeOpacity={1}
       />
+      */}
 
       {/* Controls Wrapper (Fades out) */}
       <Animated.View style={[styles.controlsWrapper, { opacity: opacityAnim, pointerEvents: showControls ? 'box-none' : 'none' }]}>
@@ -1258,6 +1410,7 @@ const VideoPlayerScreen = ({ route }) => {
                 onValueChange={handleBrightnessChange}
                 minimumTrackTintColor="#FFFFFF" maximumTrackTintColor="rgba(255, 255, 255, 0.3)"
                 thumbTintColor="transparent"
+                tapToSeek
               />
             </View>
           )}
@@ -1304,12 +1457,14 @@ const VideoPlayerScreen = ({ route }) => {
 
       {/* Subtitle Selection Modal */}
       {renderSubtitleSelectionModal()}
-    </View>
+      </View>
+    </GestureHandlerRootView>
   );
 };
 
 const styles = StyleSheet.create({
   // ... (keep all existing styles) ...
+  gestureHandlerRoot: { flex: 1 },
   container: { flex: 1, backgroundColor: '#000' },
   hiddenWebView: { position: 'absolute', width: 1, height: 1, opacity: 0, zIndex: -1 },
   video: { flex: 1, backgroundColor: '#000' },
@@ -1321,18 +1476,18 @@ const styles = StyleSheet.create({
   errorText: { color: '#fff', marginBottom: 10, fontSize: 16, fontWeight: 'bold' },
   errorDetail: { color: '#888', marginBottom: 20, textAlign: 'center' },
   retryButton: { backgroundColor: '#E50914', paddingVertical: 10, paddingHorizontal: 20, borderRadius: 5, marginBottom: 10 },
-  retryButtonText: { color: '#fff' },
-  goBackButton: { backgroundColor: '#555', paddingVertical: 10, paddingHorizontal: 20, borderRadius: 5 },
-  goBackButtonText: { color: '#fff' },
+  retryButtonText: { color: '#fff', fontWeight: 'bold' },
+  goBackButton: { backgroundColor: '#222', paddingVertical: 10, paddingHorizontal: 20, borderRadius: 5 },
+  goBackButtonText: { color: '#fff', fontWeight: 'bold' },
   overlayTouchable: { ...StyleSheet.absoluteFillObject, backgroundColor: 'transparent', zIndex: 1 },
   overlayBackground: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0, 0, 0, 0.5)', zIndex: 4 },
   controlsWrapper: { ...StyleSheet.absoluteFillObject, zIndex: 5 },
-  controlsContainer: { position: 'absolute', top: 0, left: 0, right: 0, flexDirection: 'row', padding: 10, alignItems: 'center', justifyContent: 'space-between' }, // Added justifyContent
+  controlsContainer: { position: 'absolute', top: 0, left: 0, right: 0, flexDirection: 'row', padding: 10, alignItems: 'center', justifyContent: 'space-between' },
   backButton: { padding: 8 },
-  titleContainer: { flex: 1, marginLeft: 10, marginRight: 10 }, // Added marginRight
+  titleContainer: { flex: 1, marginLeft: 10, marginRight: 10 },
   titleText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
-  topRightButtons: { flexDirection: 'row' }, // Container for top-right buttons
-  controlButton: { padding: 8, marginLeft: 8 }, // Style for subtitle buttons
+  topRightButtons: { flexDirection: 'row' },
+  controlButton: { padding: 8, marginLeft: 8 },
   brightnessSliderContainer: { position: 'absolute', left: 40, top: '20%', bottom: '20%', width: 40, justifyContent: 'center', alignItems: 'center' },
   brightnessIcon: { marginBottom: 55 },
   brightnessSlider: { width: 150, height: 30, transform: [{ rotate: '-90deg' }] },

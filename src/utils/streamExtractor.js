@@ -17,8 +17,6 @@ export const extractM3U8Stream = (tmdbId, type, season, episode, onStreamFound, 
     // Generate the embed URL using vidsrcApi
     const embedUrl = getStreamingUrl(tmdbId, type, season, episode);
 
-    // console.log(`Fetching stream from: ${embedUrl}`);
-
     // JavaScript to inject into the WebView to intercept and extract m3u8 links
     const injectedJavaScript = `
     (function() {
@@ -35,7 +33,6 @@ export const extractM3U8Stream = (tmdbId, type, season, episode, onStreamFound, 
         
         // Check if this is an m3u8 link
         if (urlStr.includes('.m3u8')) {
-          // console.log('[WebView] Found m3u8 URL via fetch:', urlStr);
           window.ReactNativeWebView.postMessage(JSON.stringify({
             type: 'stream_candidate',
             url: urlStr
@@ -64,7 +61,6 @@ export const extractM3U8Stream = (tmdbId, type, season, episode, onStreamFound, 
         xhr.open = function(method, url) {
           const urlStr = url.toString();
           if (urlStr.includes('.m3u8')) {
-            // console.log('[WebView] Found m3u8 URL via XHR:', urlStr);
             window.ReactNativeWebView.postMessage(JSON.stringify({
               type: 'stream_candidate',
               url: urlStr
@@ -133,7 +129,6 @@ export const extractM3U8Stream = (tmdbId, type, season, episode, onStreamFound, 
             }
           });
         } catch (e) {
-          // console.error('Error checking iframes:', e);
         }
       }
       
@@ -153,7 +148,6 @@ export const extractM3U8Stream = (tmdbId, type, season, episode, onStreamFound, 
         // Check all video elements
         videos.forEach(video => {
           if (video.src && video.src.includes('.m3u8') && !m3u8UrlsFound.includes(video.src)) {
-            // console.log('[WebView] Found m3u8 URL in video element:', video.src);
             m3u8UrlsFound.push(video.src);
             window.ReactNativeWebView.postMessage(JSON.stringify({
               type: 'stream',
@@ -165,7 +159,6 @@ export const extractM3U8Stream = (tmdbId, type, season, episode, onStreamFound, 
         // Check all sources
         sources.forEach(source => {
           if (source.src && source.src.includes('.m3u8') && !m3u8UrlsFound.includes(source.src)) {
-            // console.log('[WebView] Found m3u8 URL in source element:', source.src);
             m3u8UrlsFound.push(source.src);
             window.ReactNativeWebView.postMessage(JSON.stringify({
               type: 'stream',
@@ -233,23 +226,19 @@ export const extractM3U8Stream = (tmdbId, type, season, episode, onStreamFound, 
                     onStreamFound(data.url);
                     done = true;
                 } else if (data.type === 'stream_candidate') {
-                    // console.log("Stream candidate found:", data.url);
                 } else if (data.type === 'error') {
                     onError(new Error(data.message));
                 }
             } catch (error) {
-                // console.error("Error parsing WebView message:", error);
                 onError(error);
             }
         },
         onError: (syntheticEvent) => {
             const { nativeEvent } = syntheticEvent;
-            // console.error("WebView error:", nativeEvent.description);
             onError(new Error(`WebView error: ${nativeEvent.description}`));
         },
         onHttpError: (syntheticEvent) => {
             const { nativeEvent } = syntheticEvent;
-            // console.error("WebView HTTP error:", nativeEvent.statusCode);
         }
     };
 

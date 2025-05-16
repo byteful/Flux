@@ -1,30 +1,30 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react'; // Add useRef
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   StyleSheet,
   ScrollView,
   View,
   ActivityIndicator,
   RefreshControl,
-  Alert, // Import Alert
-  Text, // Import Text
+  Alert,
+  Text,
 } from 'react-native';
-import * as ScreenOrientation from 'expo-screen-orientation'; // Import ScreenOrientation
-import { useNavigation, useFocusEffect } from '@react-navigation/native'; // Add useFocusEffect
-import Animated, { useSharedValue, useAnimatedStyle, withTiming } from 'react-native-reanimated'; // Import reanimated components
+import * as ScreenOrientation from 'expo-screen-orientation';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import Animated, { useSharedValue, useAnimatedStyle, withTiming } from 'react-native-reanimated';
 import {
   fetchPopularMovies,
   fetchPopularTVShows,
-  fetchMovieDetails, // Keep for recommendations based on history
-  fetchTVShowDetails, // Keep for recommendations based on history and filtering
+  fetchMovieDetails,
+  fetchTVShowDetails,
   fetchRecommendedMovies,
   fetchRecommendedTVShows,
-  fetchMediaByGenre, // Import the new function
-  getImageUrl, // Import getImageUrl
+  fetchMediaByGenre,
+  getImageUrl,
 } from '../api/tmdbApi';
-import { getContinueWatchingList, saveToContinueWatching, removeFromContinueWatching } from '../utils/storage'; // Import removeFromContinueWatching
+import { getContinueWatchingList, saveToContinueWatching, removeFromContinueWatching } from '../utils/storage';
 import MediaRow from '../components/MediaRow';
 import FeaturedContent from '../components/FeaturedContent';
-import { SafeAreaView } from 'react-native-safe-area-context'; // Use context-aware SafeAreaView
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 // Define genres to display (ID: Name)
 const GENRES_TO_DISPLAY = {
@@ -33,12 +33,14 @@ const GENRES_TO_DISPLAY = {
     { id: 35, name: 'Comedy Movies' },
     { id: 878, name: 'Sci-Fi Movies' },
     { id: 27, name: 'Horror Movies' },
+    { id: 16, name: 'Animated Movies' },
   ],
   tv: [
     { id: 10759, name: 'Action & Adventure TV' },
     { id: 35, name: 'Comedy TV' },
     { id: 18, name: 'Drama TV' },
     { id: 9648, name: 'Mystery TV' },
+    { id: 16, name: 'Animated TV Shows' },
   ],
 };
 
@@ -55,8 +57,7 @@ const HomeScreen = () => {
   const [featuredContent, setFeaturedContent] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const opacity = useSharedValue(0); // Animated value for opacity
-
-  // Animation style
+  
   const animatedStyle = useAnimatedStyle(() => {
     return {
       opacity: opacity.value,
@@ -64,8 +65,16 @@ const HomeScreen = () => {
   });
 
   const fetchContent = useCallback(async () => {
+    // Define shuffleArray at a higher scope
+    function shuffleArray(array) {
+      for (let i = array.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [array[i], array[j]] = [array[j], array[i]];
+      }
+      return array;
+    }
+
     try {
-      // Don't set loading to true on refresh
       if (!refreshing) {
         setLoading(true);
       }
@@ -95,6 +104,12 @@ const HomeScreen = () => {
       });
 
       await Promise.all(genrePromises);
+      // Shuffle genre media
+      for (const key in newGenreMedia) {
+        if (Array.isArray(newGenreMedia[key])) { // Ensure it's an array before shuffling
+          newGenreMedia[key] = shuffleArray([...newGenreMedia[key]]);
+        }
+      }
       setGenreMedia(newGenreMedia);
 
       // Set random featured content from popular movies/tv
@@ -140,14 +155,6 @@ const HomeScreen = () => {
             );
 
             // Shuffle Recommendations
-            function shuffleArray(array) {
-              // ... (shuffle logic remains the same)
-              for (let i = array.length - 1; i > 0; i--) {
-                const j = Math.floor(Math.random() * (i + 1));
-                [array[i], array[j]] = [array[j], array[i]];
-              }
-              return array;
-            }
             recMovies = shuffleArray([...recMovies]);
             recTVShows = shuffleArray([...recTVShows]);
           }
@@ -158,9 +165,13 @@ const HomeScreen = () => {
         console.log("No watch history found, skipping recommendations based on history.");
       }
 
+      // Shuffle popular movies and TV shows
+      const shuffledMoviesData = shuffleArray([...moviesData]);
+      const shuffledTVShowsData = shuffleArray([...tvShowsData]);
+
       // Removed setTrending
-      setPopularMovies(moviesData);
-      setPopularTVShows(tvShowsData);
+      setPopularMovies(shuffledMoviesData);
+      setPopularTVShows(shuffledTVShowsData);
       setContinueWatching(continueWatchingData);
       setRecommendedMovies(recMovies);
       setRecommendedTVShows(recTVShows);
@@ -169,27 +180,23 @@ const HomeScreen = () => {
       console.error('Error fetching content:', error);
     } finally {
       setLoading(false);
-      setRefreshing(false); // Ensure refreshing is set to false
+      setRefreshing(false);
     }
-  }, [refreshing]); // Depend on refreshing state
+  }, [refreshing]);
 
   // Effect to run animation on focus
   useFocusEffect(
     useCallback(() => {
       // Reset opacity to 0 initially in case we navigate back quickly
-// Lock orientation to portrait when HomeScreen gains focus
       ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP)
         .catch(e => console.warn("Failed to lock HomeScreen orientation:", e));
       opacity.value = 0;
-      // Start the animation
       opacity.value = withTiming(1, { duration: 300 }); // Fade in over 300ms
 
-      // Optional: Cleanup function to run when screen loses focus
       return () => {
         // You could fade out here if desired, but fading in the next screen might be enough
-        // opacity.value = withTiming(0, { duration: 150 });
       };
-    }, [opacity]) // Dependency array includes opacity shared value
+    }, [opacity])
   );
 
   useEffect(() => {
@@ -205,7 +212,7 @@ const HomeScreen = () => {
 
     return unsubscribe;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [navigation]); // Removed fetchContent from dependency array to prevent potential loops
+  }, [navigation]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
@@ -214,7 +221,6 @@ const HomeScreen = () => {
 
   // handleMediaPress remains largely the same, ensuring it handles 'id' from API items
   const handleMediaPress = (item, directPlay = false) => {
-    // ... (existing logic is fine)
     const isContinueWatchingItem = item.hasOwnProperty('mediaId'); // From storage
     const isRecommendationOrApiItem = item.hasOwnProperty('id'); // From TMDB API
 
@@ -239,10 +245,9 @@ const HomeScreen = () => {
       // season/episode/episodeTitle are not applicable here, they are for continue watching items
     } else {
       console.warn('Unknown item type pressed:', item);
-      return; // Don't navigate if item structure is unknown
+      return;
     }
 
-    // Navigate to DetailScreen first, unless directPlay is true (for continue watching)
     if (directPlay && mediaType && mediaId && title) {
       // Ensure posterUrl uses the correct property name from storage
       const posterUrl = item.poster_path ? getImageUrl(item.poster_path) : null;
@@ -255,10 +260,8 @@ const HomeScreen = () => {
         season: season, // Pass season if available (from continue watching)
         episode: episode, // Pass episode if available (from continue watching)
         episodeTitle: episodeTitle, // Pass episode title if available
-        // resumeTime will be handled by VideoPlayerScreen using storage
       });
     } else if (mediaId && mediaType) {
-      // Use the correct screen name defined in AppNavigator.js
       navigation.navigate('DetailScreen', { mediaId: mediaId, mediaType: mediaType });
     } else {
       console.error("Missing mediaId or mediaType for navigation");
@@ -301,7 +304,6 @@ const HomeScreen = () => {
     <SafeAreaView style={styles.container} edges={["top"]}>
       <Animated.View style={[styles.animatedContainer, animatedStyle]}>
 
-        {/* Add Header */}
         <View style={styles.header}>
           <Text style={styles.headerTitle}>Flux</Text>
         </View>
@@ -311,16 +313,16 @@ const HomeScreen = () => {
             <RefreshControl
               refreshing={refreshing}
               onRefresh={onRefresh}
-              tintColor="#fff" // iOS
-              colors={['#fff']} // Android
+              tintColor="#fff"
+              colors={['#fff']}
             />
           }
         >
           {featuredContent && (
             <FeaturedContent
               item={featuredContent}
-              onPlay={() => handleMediaPress(featuredContent, true)} // Pass directPlay=true for play
-              onInfoPress={() => handleMediaPress(featuredContent)} // Pass default handleMediaPress for info
+              onPlay={() => handleMediaPress(featuredContent, true)}
+              onInfoPress={() => handleMediaPress(featuredContent)}
             />
           )}
 
@@ -328,10 +330,10 @@ const HomeScreen = () => {
             <MediaRow
               title="Continue Watching"
               data={continueWatching}
-              onItemPress={(item) => handleMediaPress(item, true)} // Direct play for continue watching
+              onItemPress={(item) => handleMediaPress(item, true)}
               isContinueWatching={true}
-              onInfoPress={handleInfoPress}   // Pass info handler
-              onRemovePress={handleRemovePress} // Pass remove handler
+              onInfoPress={handleInfoPress}
+              onRemovePress={handleRemovePress}
             />
           )}
 
@@ -400,21 +402,17 @@ const HomeScreen = () => {
 };
 
 const styles = StyleSheet.create({
-  animatedContainer: { // Add style for the animated wrapper
+  animatedContainer: {
     flex: 1,
-    backgroundColor: '#000', // Match screen background
+    backgroundColor: '#000',
   },
   container: {
     flex: 1,
-    // backgroundColor: '#000', // Background is now on animatedContainer
   },
-  // Add header styles
   header: {
     paddingHorizontal: 15,
-    paddingTop: 10, // Adjust as needed
+    paddingTop: 10,
     paddingBottom: 10,
-    // borderBottomWidth: 1, // Optional: Add a separator
-    // borderBottomColor: '#222',
   },
   headerTitle: {
     color: '#fff',
@@ -427,7 +425,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#000',
   },
-  // Add other styles if needed
 });
 
 export default HomeScreen;

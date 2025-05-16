@@ -196,9 +196,9 @@ const DetailScreen = ({ route, navigation }) => {
   };
   
   // Process genres
-  const genres = details.genres && details.genres.length > 0
-    ? details.genres.map(genre => genre.name).join(', ')
-    : '';
+  const genresArray = details.genres && details.genres.length > 0
+    ? details.genres.map(genre => genre.name)
+    : [];
 
   const episodesToShow = seasonDetails?.episodes?.slice(0, displayedEpisodesCount) || [];
   const totalEpisodes = seasonDetails?.episodes?.length || 0;
@@ -245,7 +245,15 @@ const DetailScreen = ({ route, navigation }) => {
               )}
             </View>
             
-            {genres ? <Text style={styles.genres}>{genres}</Text> : null}
+            {genresArray.length > 0 ? (
+              <View style={styles.genreBadgeContainer}>
+                {genresArray.map((genre, index) => (
+                  <View key={index} style={styles.genreBadge}>
+                    <Text style={styles.genreBadgeText}>{genre}</Text>
+                  </View>
+                ))}
+              </View>
+            ) : null}
             
             {/* Play button for movies - MOVED HERE */}
             {mediaType === 'movie' && (
@@ -267,12 +275,28 @@ const DetailScreen = ({ route, navigation }) => {
         {mediaType === 'tv' && (
           <>
             <View style={styles.seasonsContainer}>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                {details.seasons && details.seasons
-                  .filter(season => season.season_number > 0) // Filter out "Specials" (Season 0)
-                  .map(season => renderSeasonButton(season.season_number))
-                }
-              </ScrollView>
+              <View style={styles.seasonsScrollViewContainer}>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.seasonsScrollContent}>
+                  {details.seasons && details.seasons
+                    .filter(season => season.season_number > 0) // Filter out "Specials" (Season 0)
+                    .map(season => renderSeasonButton(season.season_number))
+                  }
+                </ScrollView>
+                <LinearGradient
+                  colors={['#000', 'transparent']}
+                  style={[styles.scrollGradient, styles.scrollGradientLeft]}
+                  start={{ x: 0, y: 0.5 }}
+                  end={{ x: 1, y: 0.5 }}
+                  pointerEvents="none"
+                />
+                <LinearGradient
+                  colors={['transparent', '#000']}
+                  style={[styles.scrollGradient, styles.scrollGradientRight]}
+                  start={{ x: 0, y: 0.5 }}
+                  end={{ x: 1, y: 0.5 }}
+                  pointerEvents="none"
+                />
+              </View>
             </View>
 
             <View style={styles.episodesContainer}>
@@ -373,6 +397,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#000',
+    paddingTop: 20
   },
   loadingContainer: {
     flex: 1,
@@ -400,12 +425,12 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    height: 400, // Match container height
+    height: 500, // Match container height
   },
   headerContent: {
     padding: 15, // Consistent padding
     position: 'absolute',
-    bottom: 20, // Position content higher
+    bottom: 5, // Position content higher
     left: 0,
     right: 0,
   },
@@ -421,7 +446,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   rating: {
-    color: '#4CAF50', // Green rating color
+    color: 'yellow',
     marginRight: 12,
     fontWeight: 'bold',
   },
@@ -439,21 +464,41 @@ const styles = StyleSheet.create({
     color: '#aaa',
     fontSize: 14,
   },
-  genres: {
-    color: '#ccc', // Slightly brighter genres
+  genres: { // This style might be unused now or could be repurposed/removed
+    color: '#ccc',
     fontSize: 14,
-    marginBottom: 16, // More space before play button
+    marginBottom: 16,
     lineHeight: 20,
+  },
+  genreBadgeContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginBottom: 16,
+  },
+  genreBadge: {
+    backgroundColor: '#222', // Dark grey badge background
+    borderRadius: 8,      // Rounded badge
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    marginRight: 8,
+    marginBottom: 8,       // Space for wrapped badges
+  },
+  genreBadgeText: {
+    color: '#888',
+    fontSize: 12,
+    textAlign: 'center'
   },
   // New Overview Section Style
   overviewContainer: {
+    marginTop: -15,
+    marginBottom: 10,
     paddingHorizontal: 15,
     paddingVertical: 10, // Add vertical padding
   },
   overview: {
     color: '#ccc',
     fontSize: 14,
-    lineHeight: 21, // Slightly increased line height
+    lineHeight: 22, // Slightly increased line height
   },
   playButton: {
     backgroundColor: '#fff', // White play button like Netflix
@@ -474,17 +519,38 @@ const styles = StyleSheet.create({
     marginLeft: 8, // Space icon and text
   },
   seasonsContainer: {
-    paddingHorizontal: 15, // Match other padding
+    // paddingHorizontal: 15, // Horizontal padding will be on the inner ScrollView content
     paddingVertical: 10,
     borderBottomWidth: 1,
     borderBottomColor: '#222',
+    // position: 'relative', // Ensure gradients are positioned correctly if needed, but View should handle it
+  },
+  seasonsScrollViewContainer: {
+    position: 'relative', // For absolute positioning of gradients
+    marginHorizontal: 0, // Remove margin if seasonsContainer had it
+  },
+  seasonsScrollContent: {
+    paddingHorizontal: 15, // Apply padding here so gradients can overlay edges
+  },
+  scrollGradient: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    width: 25, // Width of the gradient fade
+    zIndex: 1, // Ensure gradient is above the scroll content if needed (usually not for pointerEvents="none")
+  },
+  scrollGradientLeft: {
+    left: 0,
+  },
+  scrollGradientRight: {
+    right: 0,
   },
   seasonButton: {
     paddingVertical: 8,
-    paddingHorizontal: 16, // Adjust padding
+    paddingHorizontal: 20, // Adjust padding
     marginRight: 10, // Adjust spacing
-    borderRadius: 15, // More rounded buttons
-    backgroundColor: '#333', // Default background
+    borderRadius: 8, // More rounded buttons
+    backgroundColor: '#222', // Default background
     borderWidth: 0, // Remove border
   },
   selectedSeasonButton: {
@@ -512,8 +578,9 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 18,
     fontWeight: 'bold',
-    marginBottom: 15,
-    paddingHorizontal: 15, // Add horizontal padding to section titles
+    marginTop: 15,
+    marginBottom: 20,
+    paddingHorizontal: 0, // Add horizontal padding to section titles
   },
   episodeItem: {
     marginBottom: 15,
@@ -609,9 +676,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 6,
   },
-  castPlaceholderText: { // Removed, using Icon now
-    // ...
-  },
   castName: {
     color: '#fff',
     fontSize: 13,
@@ -625,12 +689,14 @@ const styles = StyleSheet.create({
   },
   // Recommendations Styles
   recommendationsSection: {
+    paddingHorizontal: 15,
     paddingVertical: 15,
     borderTopWidth: 1, // Add separator line above recommendations
     borderTopColor: '#222',
   },
   recommendationsList: {
-    paddingHorizontal: 15, // Add padding to the container
+    // paddingHorizontal: 15, // Add padding to the container
+    paddingRight: 5,
   },
   recommendationCard: {
     marginRight: 10, // Space between recommendation cards

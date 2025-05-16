@@ -17,7 +17,6 @@ import Animated, { useSharedValue, useAnimatedStyle, withTiming } from 'react-na
 import { clearStreamCache, saveAutoPlaySetting, getAutoPlaySetting } from '../utils/storage'; // Import storage functions
 
 const THEME_KEY = 'app_theme';
-// const AUTO_PLAY_KEY = 'auto_play'; // No longer needed here, managed in storage.js
 
 const SettingsScreen = () => {
   const [autoPlayNext, setAutoPlayNext] = useState(false); // Default to false, will be loaded
@@ -181,7 +180,6 @@ const SettingsScreen = () => {
       opacity.value = 0; // Reset
       opacity.value = withTiming(1, { duration: 300 }); // Fade in
       return () => {
-        // Optional fade out
       };
     }, [opacity])
   );
@@ -281,7 +279,6 @@ const styles = StyleSheet.create({
   },
   container: {
     flex: 1,
-    // backgroundColor: '#000', // Background is now on animatedContainer
   },
   centered: {
     justifyContent: 'center',

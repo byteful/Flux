@@ -35,7 +35,6 @@ const SearchScreen = ({ navigation }) => {
       opacity.value = 0;
       opacity.value = withTiming(1, { duration: 300 });
       return () => {
-        // Optional fade out
       };
     }, [opacity])
   );

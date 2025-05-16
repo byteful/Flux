@@ -52,7 +52,7 @@ const MainStack = () => {
         component={DetailScreen}
         options={({ route }) => ({
           title: route.params?.title || 'Details',
-          headerBackTitle: 'Back', // Add this line
+          headerBackTitle: '', // Add this line
         })}
       />
     </Stack.Navigator>
@@ -106,7 +106,7 @@ const MainTabs = () => {
         options={{
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="settings" color={color} size={size} />
-          ),
+          )
         }}
       />
     </Tab.Navigator>
