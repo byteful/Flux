@@ -8,14 +8,20 @@
 </head>
 <body>
     <header>
-        <h1>Flux 🎬</h1>
-        <p>A cross-platform mobile video streaming application built with React Native and Expo.</p>
+        <h1>FLUX</h1>
+        <p>Your seamless gateway to movies and TV shows, right on your mobile device.</p>
     </header>
 
-    <div id="download">
-        <a href="altstore://install?url=https://github.com/byteful/Flux/releases/latest/download/Flux.ipa" class="button altstore-button">
-            Add to AltStore (iOS)
-        </a>
+    <div id="download-area">
+        <!-- <p>Get Flux for your device:</p> -->
+        <div class="download-buttons">
+            <a href="altstore://install?url=https://github.com/byteful/Flux/releases/latest/download/Flux.ipa" class="button ios-button">
+                <img src="https://img.icons8.com/ios-filled/50/ffffff/mac-os.png" alt="Apple Logo" class="logo-icon"> Sideload with AltStore
+            </a>
+            <a href="https://github.com/byteful/Flux/releases/latest/download/Flux.apk" class="button android-button"> <!-- Placeholder URL -->
+                <img src="https://img.icons8.com/ios-filled/50/ffffff/android-os.png" alt="Android Logo" class="logo-icon"> Download Android APK
+            </a>
+        </div>
     </div>
 
     <section id="overview">
@@ -42,7 +48,9 @@
     <section id="demo">
         <h2>Demo 🎥</h2>
         <p>Check out the app in action:</p>
-        <video src="https://github.com/user-attachments/assets/725196be-83ae-4b81-be00-90f0dbb7a05e" controls width="300"></video>
+        <div class="video-container">
+            <video src="https://github.com/user-attachments/assets/725196be-83ae-4b81-be00-90f0dbb7a05e" controls autoplay muted></video>
+        </div>
     </section>
 
     <section id="disclaimer">
@@ -51,7 +59,11 @@
     </section>
 
     <footer>
-        <p>Made by byteful ❤️</p>
+        <p>Created with ❤️ by byteful.</p>
+        <p>
+            Flux is an open-source project.
+            <a href="https://github.com/byteful/Flux" target="_blank" rel="noopener noreferrer">Check out the code on GitHub!</a>
+        </p>
     </footer>
 </body>
 </html>

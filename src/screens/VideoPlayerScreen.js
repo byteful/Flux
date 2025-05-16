@@ -80,11 +80,10 @@ const VideoPlayerScreen = ({ route }) => {
   const [parsedSubtitles, setParsedSubtitles] = useState([]);
   const [currentSubtitleText, setCurrentSubtitleText] = useState('');
   const [showSubtitleSelection, setShowSubtitleSelection] = useState(false);
-  const [subtitlesEnabled, setSubtitlesEnabled] = useState(false); // Default to enabled if subs are loaded
+  const [subtitlesEnabled, setSubtitlesEnabled] = useState(false); // Default to disabled
   const [loadingSubtitles, setLoadingSubtitles] = useState(false);
-  const [subtitleOffset, setSubtitleOffset] = useState(0); // New state for offset in seconds
   // --- End Subtitle States ---
-
+  
   // --- Logging Wrappers for State Setters --- (Keep if used elsewhere, remove if only for countdown)
   // NOTE: Reviewing if logSetShowControls is still needed without countdown logic. Keeping for now.
   const logSetShowControls = useCallback((value) => {
@@ -478,12 +477,8 @@ const VideoPlayerScreen = ({ route }) => {
       return;
     }
 
-    // Apply the offset to the current video position
-    const adjustedPosition = currentPositionSeconds + subtitleOffset;
-
     const currentSub = parsedSubtitles.find(
-      // Use adjustedPosition for comparison
-      line => adjustedPosition >= line.startSeconds && adjustedPosition <= line.endSeconds
+      line => currentPositionSeconds >= line.startSeconds && currentPositionSeconds <= line.endSeconds
     );
 
     let newText = currentSub ? currentSub.text : '';
@@ -501,21 +496,13 @@ const VideoPlayerScreen = ({ route }) => {
     if (newText !== currentSubtitleText) {
       setCurrentSubtitleText(newText);
     }
-  }, [subtitlesEnabled, parsedSubtitles, currentSubtitleText, subtitleOffset]); // Added dependencies
+  }, [subtitlesEnabled, parsedSubtitles, currentSubtitleText]);
 
   const toggleSubtitles = () => {
     setSubtitlesEnabled(prev => !prev);
     logSetShowControls(true); // Keep controls visible
   };
 
-  // --- New Subtitle Offset Functions ---
-  const adjustSubtitleOffset = (adjustment) => {
-    setSubtitleOffset(prevOffset => prevOffset + adjustment);
-    // Optionally provide feedback to the user about the new offset
-    // console.log(`Subtitle offset: ${subtitleOffset + adjustment}s`);
-    logSetShowControls(true); // Keep controls visible after adjustment
-  };
-  // --- End Subtitle Offset Functions ---
 
   // --- End Subtitle Logic ---
 
@@ -1256,33 +1243,7 @@ const VideoPlayerScreen = ({ route }) => {
             </View>
             {/* Subtitle Toggle/Selection Buttons */}
             <View style={styles.topRightButtons}>
-              {/* Subtitle Offset Controls */}
-              <TouchableOpacity onPress={() => adjustSubtitleOffset(-0.2)} style={styles.controlButton}>
-                <Ionicons name="remove-circle-outline" size={24} color="white" />
-              </TouchableOpacity>
-              <Text style={styles.offsetText}>{subtitleOffset.toFixed(1)}s</Text>
-              <TouchableOpacity onPress={() => adjustSubtitleOffset(0.2)} style={styles.controlButton}>
-                <Ionicons name="add-circle-outline" size={24} color="white" />
-              </TouchableOpacity>
-              {/* Existing Subtitle Buttons */}
-              <TouchableOpacity onPress={toggleSubtitles} style={styles.controlButton}>
-                <Ionicons name={subtitlesEnabled ? "chatbubble" : "chatbubble-outline"} size={24} color="white" />
-              </TouchableOpacity>
-              <TouchableOpacity onPress={async () => {
-                const currentOrientation = await ScreenOrientation.getOrientationLockAsync();
-                console.log(`[Orientation Debug] Showing subtitle modal. Current lock: ${ScreenOrientation.OrientationLock[currentOrientation]}`);
-                // Unlock orientation before showing modal
-                try {
-                  await ScreenOrientation.unlockAsync();
-                  console.log("[Orientation Debug] Unlocked orientation for modal.");
-                } catch (e) {
-                  console.error("Failed to unlock orientation:", e);
-                }
-                setShowSubtitleSelection(true);
-                logSetShowControls(true); // Keep controls visible while modal is open
-              }} style={styles.controlButton}>
-                <Ionicons name="settings-outline" size={24} color="white" />
-              </TouchableOpacity>
+              {/* Subtitle buttons are now hidden */}
             </View>
           </SafeAreaView>
 
@@ -1350,7 +1311,7 @@ const VideoPlayerScreen = ({ route }) => {
 const styles = StyleSheet.create({
   // ... (keep all existing styles) ...
   container: { flex: 1, backgroundColor: '#000' },
-  hiddenWebView: { position: 'relative', width: 100, height: 100, opacity: 1, zIndex: 100 },
+  hiddenWebView: { position: 'absolute', width: 1, height: 1, opacity: 0, zIndex: -1 },
   video: { flex: 1, backgroundColor: '#000' },
   loaderContainer: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center', backgroundColor: '#000', zIndex: 10 },
   loadingBackButtonContainer: { position: 'absolute', top: 0, left: 0, right: 0, padding: 10, zIndex: 11 },
@@ -1501,11 +1462,5 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   // --- End Subtitle Styles ---
-  offsetText: { // Style for the offset display
-    color: 'white',
-    fontSize: 14,
-    marginHorizontal: 5,
-    alignSelf: 'center', // Center vertically with buttons
-  },
 });
 export default VideoPlayerScreen;

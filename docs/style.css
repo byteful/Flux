@@ -1,43 +1,147 @@
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700&display=swap');
+
+:root {
+    --primary-color: #6a4de2; /* Purple */
+    --secondary-color: #34d399; /* Green */
+    --background-color: #111827; /* Dark Gray */
+    --surface-color: #1f2937;   /* Lighter Dark Gray */
+    --text-color: #f3f4f6;      /* Light Gray */
+    --text-muted-color: #9ca3af; /* Medium Gray */
+    --accent-color: #f59e0b;    /* Amber */
+    --border-radius: 12px;
+    --box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2), 0 6px 6px rgba(0, 0, 0, 0.15);
+}
+
 body {
-    font-family: sans-serif;
-    line-height: 1.6;
+    font-family: 'Poppins', sans-serif;
+    line-height: 1.7;
     margin: 0;
     padding: 0;
-    background-color: #f4f4f4;
-    color: #333;
+    background-color: var(--background-color);
+    color: var(--text-color);
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
 }
 
 header {
-    background-color: #333;
+    background-image: linear-gradient(rgba(0, 0, 0, 0.5), rgba(0, 0, 0, 0.5)), url('https://images.pexels.com/photos/1169754/pexels-photo-1169754.jpeg?cs=srgb&dl=pexels-philippedonn-1169754.jpg&fm=jpg');
+    background-size: cover;
+    background-position: center;
     color: #fff;
-    padding: 1rem 0;
+    padding: 5rem 1rem; /* Increased padding for better visual with background image */
     text-align: center;
+    border-bottom-left-radius: var(--border-radius);
+    border-bottom-right-radius: var(--border-radius);
+    box-shadow: var(--box-shadow);
+    position: relative; /* Ensure z-index works if needed for text over overlay */
 }
 
 header h1 {
     margin: 0;
-    font-size: 2.5rem;
+    font-size: 3rem;
+    font-weight: 700;
+    letter-spacing: 1px;
 }
 
 header p {
-    margin-top: 0.5rem;
+    margin-top: 0.75rem;
+    font-size: 1.25rem;
+    font-weight: 300;
+    opacity: 0.9;
+}
+
+#download-area {
+    text-align: center;
+    padding: 2rem 1rem;
+    background-color: #00000000; /* Transparent background */
+    margin: 2.1rem auto 1rem;
+    max-width: 800px; /* Consistent max-width */
+    width: 90%; /* Use percentage for responsiveness within max-width */
+    box-sizing: border-box; /* Ensures padding doesn't add to width */
+    border-radius: var(--border-radius);
+}
+
+#download-area p {
+    font-size: 1.2rem;
+    margin-bottom: 1.5rem;
+    color: var(--text-muted-color);
+}
+
+.download-buttons {
+    display: flex;
+    justify-content: center;
+    gap: 3rem;
+    flex-wrap: wrap;
+}
+
+.button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center; /* Center content for uniform look */
+    gap: 0.75rem;
+    padding: 14px 30px; /* Slightly increased padding */
+    min-width: 280px; /* Ensure buttons have the same minimum width */
+    box-sizing: border-box; /* Include padding and border in the element's total width and height */
+    border: none;
+    border-radius: var(--border-radius);
+    color: #fff;
+    text-align: center;
+    text-decoration: none;
     font-size: 1.1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform 0.2s ease-out, background-color 0.3s ease, box-shadow 0.3s ease;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+}
+
+.button .logo-icon { /* Changed from .icon to .logo-icon to match HTML */
+    height: 24px; /* Adjust size as needed */
+    width: auto;
+    vertical-align: middle;
+}
+
+.button:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 6px 12px rgba(0,0,0,0.15);
+}
+
+.ios-button {
+    background-color: var(--primary-color);
+}
+
+.ios-button:hover {
+    background-color: #583cc7; /* Darker purple */
+    color: white;
+}
+
+.android-button {
+    background-color: var(--secondary-color);
+}
+
+.android-button:hover {
+    background-color: #2aa779; /* Darker green */
+    color: white;
 }
 
 section {
-    padding: 2rem;
-    margin: 1rem auto;
-    background-color: #fff;
-    max-width: 800px;
-    border-radius: 8px;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    padding: 2.5rem;
+    margin: 2rem auto;
+    background-color: var(--surface-color);
+    max-width: 800px; /* Consistent max-width */
+    width: 90%; /* Use percentage for responsiveness within max-width */
+    box-sizing: border-box; /* Ensures padding doesn't add to width */
+    border-radius: var(--border-radius);
+    box-shadow: var(--box-shadow);
 }
 
 h2 {
-    color: #333;
-    border-bottom: 2px solid #eee;
-    padding-bottom: 0.5rem;
-    margin-bottom: 1rem;
+    color: var(--text-color);
+    border-bottom: 3px solid var(--primary-color);
+    padding-bottom: 0.75rem;
+    margin-bottom: 1.5rem;
+    font-size: 2rem;
+    font-weight: 600;
 }
 
 ul {
@@ -46,82 +150,132 @@ ul {
 }
 
 ul li {
-    margin-bottom: 0.5rem;
-    padding-left: 1.2rem;
+    margin-bottom: 0.75rem;
+    padding-left: 2rem;
     position: relative;
+    font-size: 1.05rem;
 }
 
 ul li::before {
-    content: '✓'; /* Checkmark or other symbol */
+    content: '✨';
     position: absolute;
     left: 0;
-    color: #28a745; /* Green color for checkmark */
+    color: var(--accent-color);
+    font-size: 1.2rem;
 }
 
 .warning {
-    background-color: #fff3cd;
-    color: #856404;
-    border: 1px solid #ffeeba;
-    padding: 1rem;
-    border-radius: 4px;
-    margin-top: 1rem;
+    background-color: #372c0a; /* Darker warning background */
+    color: #fef3c7; /* Lighter warning text */
+    border: 1px solid var(--accent-color);
+    padding: 1.5rem;
+    border-radius: var(--border-radius);
+    margin-top: 1.5rem;
 }
 
 .warning p {
     margin: 0;
 }
 
+.warning strong {
+    color: #fcd34d; /* Amber for strong text */
+}
+
 a {
-    color: #007bff;
+    color: var(--secondary-color);
     text-decoration: none;
+    transition: color 0.3s ease;
 }
 
 a:hover {
-    text-decoration: underline;
+    color: #10b981; /* Lighter green on hover */
+    text-decoration: none;
 }
+
+.video-container {
+    margin: 1.5rem auto 0; /* Center the container */
+    width: auto; /* Allow container to size based on video content */
+    max-width: 50%; /* Ensure container doesn't exceed parent section width */
+    display: flex; /* Use flex to center the video element itself if it's smaller than max-width */
+    justify-content: center;
+    border-radius: var(--border-radius);
+    box-shadow: var(--box-shadow);
+    border: 3px solid #333;
+    overflow: hidden;
+}
+
+.video-container video {
+    display: block; /* Remove extra space below video */
+    max-width: 100%; /* Video will not exceed the width of .video-container */
+    height: auto;   /* Maintain aspect ratio based on natural width */
+    border-radius: var(--border-radius); /* Apply border-radius to the video itself */
+    /* object-fit: contain; /* Ensures the whole video is visible, might add letterboxing if aspect ratios differ */
+}
+
 
 footer {
     text-align: center;
-    margin-top: 2rem;
-    padding: 1rem;
-    background-color: #333;
-    color: #fff;
+    margin-top: auto; /* Pushes footer to the bottom */
+    padding: 2rem 1rem;
+    background-color: #0c111b; /* Even darker background for footer */
+    color: var(--text-muted-color);
+    font-size: 0.9rem;
+}
+
+footer p {
+    margin: 0;
 }
 
 /* Responsive adjustments */
-@media (max-width: 600px) {
+@media (max-width: 768px) {
+    header h1 {
+        font-size: 2.5rem;
+    }
+    header p {
+        font-size: 1.1rem;
+    }
+    section, #download-area {
+        padding: 2rem;
+        margin: 1.5rem auto;
+    }
+    .download-buttons {
+        flex-direction: column;
+        align-items: center;
+    }
+    .button {
+        width: 80%;
+        justify-content: center;
+    }
+}
+
+@media (max-width: 480px) {
+    header {
+        padding: 3rem 1rem;
+    }
     header h1 {
         font-size: 2rem;
     }
-    section {
-        padding: 1.5rem;
-        margin: 0.5rem;
+    header p {
+        font-size: 1rem;
     }
-}
-/* Button Styles */
-.button {
-    display: inline-block;
-    padding: 10px 20px;
-    margin-top: 1rem;
-    border: none;
-    border-radius: 5px;
-    color: #fff;
-    text-align: center;
-    text-decoration: none;
-    font-size: 1rem;
-    cursor: pointer;
-    transition: background-color 0.3s ease;
-}
-
-.altstore-button {
-    background-color: #6a4de2; /* AltStore-like purple */
-}
-
-.altstore-button:hover {
-    background-color: #583cc7;
-}
-
-#download {
-    display: flex;
-    justify-content: center;
+    section, #download-area {
+        padding: 1.5rem;
+        margin: 1rem auto;
+        border-radius: calc(var(--border-radius) - 4px);
+    }
+    h2 {
+        font-size: 1.75rem;
+    }
+    .button {
+        padding: 10px 20px;
+        font-size: 1rem;
+        width: 90%;
+    }
+    ul li {
+        font-size: 1rem;
+        padding-left: 1.5rem;
+    }
+    ul li::before {
+        font-size: 1rem;
+    }
 }
