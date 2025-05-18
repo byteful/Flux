@@ -32,10 +32,12 @@ https://github.com/user-attachments/assets/725196be-83ae-4b81-be00-90f0dbb7a05e
 
 To build and run this project yourself, you'll need Node.js, npm/yarn, and the Expo Go app or development environment set up for React Native.
 
+Publicly available builds are uploaded to the Releases tab, but if you really want to build them yourselves, this is how to do it:
+
 1.  **Clone the repository:**
     ````bash
-    git clone <your-repo-url>
-    cd Flux/app
+    git clone https://github.com/byteful/Flux.git
+    cd Flux
     ````
 2.  **Install dependencies:**
     ````bash
@@ -61,6 +63,8 @@ To build and run this project yourself, you'll need Node.js, npm/yarn, and the E
 
 ## TO-DO 📝
 
+-   [ ] Watch party system
+-   [ ] Subtitles
 -   [ ] View seasons/episodes list directly from the video player view.
 -   [x] Add controls for adjusting screen brightness within the video player.
 -   [x] Implement search functionality.
