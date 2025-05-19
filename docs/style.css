@@ -80,8 +80,8 @@ header p {
     align-items: center;
     justify-content: center; /* Center content for uniform look */
     gap: 0.75rem;
-    padding: 14px 30px; /* Slightly increased padding */
-    min-width: 280px; /* Ensure buttons have the same minimum width */
+    padding: 14px 20px; /* Slightly increased padding */
+    width: 300px; /* Ensure buttons have the same width */
     box-sizing: border-box; /* Include padding and border in the element's total width and height */
     border: none;
     border-radius: var(--border-radius);
@@ -115,12 +115,30 @@ header p {
     color: white;
 }
 
+.altstore-button {
+    background-color: rgb(59, 137, 151);
+}
+
+.altstore-button:hover {
+    background-color: rgb(48, 110, 121); /* Darker purple */
+    color: white;
+}
+
+.github-button {
+    background-color: rgb(41, 41, 41);
+}
+
+.github-button:hover {
+    background-color: rgb(21, 21, 21); /* Darker purple */
+    color: white;
+}
+
 .android-button {
-    background-color: var(--secondary-color);
+    background-color: rgb(120, 194, 87);
 }
 
 .android-button:hover {
-    background-color: #2aa779; /* Darker green */
+    background-color: rgb(98, 158, 71); /* Darker green */
     color: white;
 }
 
