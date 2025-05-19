@@ -14,6 +14,8 @@ import Animated, { useSharedValue, useAnimatedStyle, withTiming } from 'react-na
 import {
   fetchPopularMovies,
   fetchPopularTVShows,
+  fetchNewReleaseMovies,
+  fetchNewReleaseTVShows,
   fetchMovieDetails,
   fetchTVShowDetails,
   fetchRecommendedMovies,
@@ -49,6 +51,8 @@ const HomeScreen = () => {
   // Removed trending state
   const [popularMovies, setPopularMovies] = useState([]);
   const [popularTVShows, setPopularTVShows] = useState([]);
+  const [newReleaseMovies, setNewReleaseMovies] = useState([]);
+  const [newReleaseTVShows, setNewReleaseTVShows] = useState([]);
   const [continueWatching, setContinueWatching] = useState([]);
   const [recommendedMovies, setRecommendedMovies] = useState([]);
   const [recommendedTVShows, setRecommendedTVShows] = useState([]);
@@ -83,6 +87,8 @@ const HomeScreen = () => {
       // Removed fetchTrending
       const moviesData = await fetchPopularMovies();
       const tvShowsData = await fetchPopularTVShows();
+      const newReleaseMoviesData = await fetchNewReleaseMovies();
+      const newReleaseTVShowsData = await fetchNewReleaseTVShows();
 
       // Fetch genre-specific content (filtered by US providers in tmdbApi.js)
       const genrePromises = [];
@@ -168,10 +174,14 @@ const HomeScreen = () => {
       // Shuffle popular movies and TV shows
       const shuffledMoviesData = shuffleArray([...moviesData]);
       const shuffledTVShowsData = shuffleArray([...tvShowsData]);
+      const shuffledNewReleaseMoviesData = shuffleArray([...newReleaseMoviesData]);
+      const shuffledNewReleaseTVShowsData = shuffleArray([...newReleaseTVShowsData]);
 
       // Removed setTrending
       setPopularMovies(shuffledMoviesData);
       setPopularTVShows(shuffledTVShowsData);
+      setNewReleaseMovies(shuffledNewReleaseMoviesData);
+      setNewReleaseTVShows(shuffledNewReleaseTVShowsData);
       setContinueWatching(continueWatchingData);
       setRecommendedMovies(recMovies);
       setRecommendedTVShows(recTVShows);
@@ -262,7 +272,7 @@ const HomeScreen = () => {
         episodeTitle: episodeTitle, // Pass episode title if available
       });
     } else if (mediaId && mediaType) {
-      navigation.navigate('DetailScreen', { mediaId: mediaId, mediaType: mediaType });
+      navigation.navigate('DetailScreen', { mediaId: mediaId, mediaType: mediaType, title: title });
     } else {
       console.error("Missing mediaId or mediaType for navigation");
     }
@@ -272,7 +282,7 @@ const HomeScreen = () => {
   const handleInfoPress = (item) => {
     // Continue watching items store mediaId and mediaType directly
     if (item.mediaId && item.mediaType) {
-      navigation.navigate('DetailScreen', { mediaId: item.mediaId, mediaType: item.mediaType });
+      navigation.navigate('DetailScreen', { mediaId: item.mediaId, mediaType: item.mediaType, title: item.title });
     } else {
       console.error("Missing mediaId or mediaType for info navigation from Continue Watching item:", item);
       Alert.alert("Error", "Could not load details for this item.");
@@ -334,6 +344,23 @@ const HomeScreen = () => {
               isContinueWatching={true}
               onInfoPress={handleInfoPress}
               onRemovePress={handleRemovePress}
+            />
+          )}
+
+          {/* New Release Rows */}
+          {newReleaseMovies.length > 0 && (
+            <MediaRow
+              title="New Release Movies"
+              data={newReleaseMovies}
+              onItemPress={handleMediaPress}
+            />
+          )}
+
+          {newReleaseTVShows.length > 0 && (
+            <MediaRow
+              title="New Release TV Shows"
+              data={newReleaseTVShows}
+              onItemPress={handleMediaPress}
             />
           )}
 

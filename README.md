@@ -66,6 +66,7 @@ Publicly available builds are uploaded to the Releases tab, but if you really wa
 -   [ ] Watch party system
 -   [ ] Subtitles
 -   [ ] View seasons/episodes list directly from the video player view.
+-   [ ] Support AirPlay and Chromecast
 -   [x] Add controls for adjusting screen brightness within the video player.
 -   [x] Implement search functionality.
 -   [x] Add user preferences/settings screen.

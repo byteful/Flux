@@ -1,11 +1,15 @@
 {
   "cli": {
-    "version": ">= 7.0.0"
+    "version": ">= 7.0.0",
+    "appVersionSource": "local"
   },
   "build": {
     "development": {
       "developmentClient": true,
       "distribution": "internal",
+      "env": {
+        "APP_VARIANT": "development"
+      },
       "ios": {
         "simulator": true
       }
@@ -17,7 +21,10 @@
       }
     },
     "production": {
-      "autoIncrement": true
+      "autoIncrement": false,
+      "android": {
+        "buildType": "apk"
+      }
     }
   },
   "submit": {

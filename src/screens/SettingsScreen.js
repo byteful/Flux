@@ -7,23 +7,28 @@ import {
   Switch,
   ScrollView,
   Alert,
-  ActivityIndicator
+  ActivityIndicator,
+  Platform  // Import Platform
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import Animated, { useSharedValue, useAnimatedStyle, withTiming } from 'react-native-reanimated';
-import { clearStreamCache, saveAutoPlaySetting, getAutoPlaySetting } from '../utils/storage'; // Import storage functions
+import Constants from 'expo-constants'; // Import Constants
+// Import storage functions, including clearSearchHistory
+import { clearStreamCache, saveAutoPlaySetting, getAutoPlaySetting, clearSearchHistory as clearAllSearchHistoryStorage } from '../utils/storage';
 
 const THEME_KEY = 'app_theme';
+const SEARCH_HISTORY_KEY = 'searchHistory'; // Define key for consistency
 
 const SettingsScreen = () => {
   const [autoPlayNext, setAutoPlayNext] = useState(false); // Default to false, will be loaded
   const [loading, setLoading] = useState(true);
   const [watchHistory, setWatchHistory] = useState(0);
-  const [streamCacheCount, setStreamCacheCount] = useState(0); // State for stream cache count
-  const [storageUsageValue, setStorageUsageValue] = useState(0); // State for storage value
+  const [streamCacheCount, setStreamCacheCount] = useState(0);
+  const [searchHistoryCount, setSearchHistoryCount] = useState(0); // State for search history count
+  const [storageUsageValue, setStorageUsageValue] = useState(0);
   const [storageUsageUnit, setStorageUsageUnit] = useState('KB'); // State for storage unit (KB/MB)
   const opacity = useSharedValue(0); // Animated value
 
@@ -33,6 +38,20 @@ const SettingsScreen = () => {
       opacity: opacity.value,
     };
   });
+
+  const formatBuildDate = (isoDateString) => {
+    if (!isoDateString) {
+      return 'N/A';
+    }
+    try {
+      const date = new Date(isoDateString);
+      //toLocaleString can be customized further if needed
+      return date.toLocaleDateString();
+    } catch (e) {
+      console.error("Error formatting build date:", e);
+      return 'Invalid Date';
+    }
+  };
 
   useEffect(() => {
     // Load saved settings and calculate storage
@@ -53,6 +72,11 @@ const SettingsScreen = () => {
         const streamCacheString = await AsyncStorage.getItem('streamCache');
         const streamCacheData = streamCacheString ? JSON.parse(streamCacheString) : {};
         setStreamCacheCount(Object.keys(streamCacheData).length);
+
+        // Get search history count
+        const searchHistoryString = await AsyncStorage.getItem(SEARCH_HISTORY_KEY);
+        const searchHistoryData = searchHistoryString ? JSON.parse(searchHistoryString) : [];
+        setSearchHistoryCount(searchHistoryData.length);
 
         // Calculate total storage usage
         const allKeys = await AsyncStorage.getAllKeys();
@@ -84,19 +108,37 @@ const SettingsScreen = () => {
     };
 
     loadSettingsAndStorage();
-  }, []);
+  }, []); // Empty dependency array means this runs once on mount
 
-  // Function to recalculate storage after clearing cache
-  const recalculateStorage = async () => {
+  // Function to recalculate storage and specific counts
+  const refreshStorageData = async () => {
     try {
+      setLoading(true); // Show loader while refreshing
+
+      // Get watch history count
+      const watchDataString = await AsyncStorage.getItem('continueWatching');
+      const watchData = watchDataString ? JSON.parse(watchDataString) : {};
+      setWatchHistory(Object.keys(watchData).length);
+
+      // Get stream cache count
+      const streamCacheString = await AsyncStorage.getItem('streamCache');
+      const streamCacheData = streamCacheString ? JSON.parse(streamCacheString) : {};
+      setStreamCacheCount(Object.keys(streamCacheData).length);
+
+      // Get search history count
+      const searchHistoryString = await AsyncStorage.getItem(SEARCH_HISTORY_KEY);
+      const searchHistoryData = searchHistoryString ? JSON.parse(searchHistoryString) : [];
+      setSearchHistoryCount(searchHistoryData.length);
+
+      // Calculate total storage usage
       const allKeys = await AsyncStorage.getAllKeys();
       let totalSize = 0;
       if (allKeys.length > 0) {
         const allData = await AsyncStorage.multiGet(allKeys);
         allData.forEach(([key, value]) => {
           if (value) {
-            totalSize += key.length * 2;
-            totalSize += value.length * 2;
+            totalSize += key.length * 2; // Estimate key size (UTF-16)
+            totalSize += value.length * 2; // Estimate value size (UTF-16)
           }
         });
       }
@@ -110,9 +152,12 @@ const SettingsScreen = () => {
         setStorageUsageUnit('MB');
       }
     } catch (error) {
-      console.error('Error recalculating storage:', error);
+      console.error('Error refreshing storage data:', error);
+    } finally {
+      setLoading(false);
     }
   };
+
 
   // Save autoplay setting using the new function
   const handleAutoPlayToggle = async (value) => {
@@ -138,10 +183,12 @@ const SettingsScreen = () => {
           onPress: async () => {
             try {
               await AsyncStorage.removeItem('continueWatching');
-              setWatchHistory(0);
+              // setWatchHistory(0); // refreshStorageData will update this
+              await refreshStorageData(); // Refresh all counts and total storage
               Alert.alert('Success', 'Your watch history has been cleared.');
             } catch (error) {
               console.error('Error clearing watch history:', error);
+              Alert.alert('Error', 'Could not clear watch history.');
             }
           },
         },
@@ -162,8 +209,8 @@ const SettingsScreen = () => {
           onPress: async () => {
             try {
               await clearStreamCache();
-              setStreamCacheCount(0); // Reset count in state
-              await recalculateStorage(); // Recalculate storage usage
+              // setStreamCacheCount(0); // refreshStorageData will update this
+              await refreshStorageData(); // Refresh all counts and total storage
               Alert.alert('Success', 'Stream cache has been cleared.');
             } catch (error) {
               console.error('Error clearing stream cache:', error);
@@ -175,13 +222,42 @@ const SettingsScreen = () => {
     );
   };
 
+  // Clear search history
+  const handleClearSearchHistory = () => {
+    Alert.alert(
+      'Clear Search History',
+      'Are you sure you want to clear your search history? This action cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clear',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await clearAllSearchHistoryStorage(); // Use the imported function
+              // setSearchHistoryCount(0); // refreshStorageData will update this
+              await refreshStorageData(); // Refresh all counts and total storage
+              Alert.alert('Success', 'Your search history has been cleared.');
+            } catch (error) {
+              console.error('Error clearing search history:', error);
+              Alert.alert('Error', 'Could not clear search history.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+
   useFocusEffect(
     useCallback(() => {
       opacity.value = 0; // Reset
       opacity.value = withTiming(1, { duration: 300 }); // Fade in
+      refreshStorageData(); // Refresh data when screen comes into focus
       return () => {
+        // Optional: any cleanup when screen loses focus
       };
-    }, [opacity])
+    }, [opacity]) // opacity is the dependency for the animation part
   );
 
   if (loading) {
@@ -247,17 +323,35 @@ const SettingsScreen = () => {
             <TouchableOpacity style={styles.button} onPress={handleClearStreamCache}>
               <Text style={styles.buttonText}>Clear Stream Cache</Text>
             </TouchableOpacity>
+
+            {/* Search History Info */}
+            <View style={[styles.dataInfo, { marginTop: 10 }]}>
+              <Ionicons name="search-circle-outline" size={22} color="#888" style={styles.settingIcon} />
+              <View style={styles.watchHistoryContainer}>
+                <Text style={styles.settingTitle}>Search History</Text>
+                <Text style={styles.watchHistoryCount}>
+                  {searchHistoryCount} {searchHistoryCount === 1 ? 'query' : 'queries'}
+                </Text>
+              </View>
+            </View>
+
+            {/* Clear Search History Button */}
+            <TouchableOpacity style={styles.button} onPress={handleClearSearchHistory}>
+              <Text style={styles.buttonText}>Clear Search History</Text>
+            </TouchableOpacity>
           </View>
 
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>About</Text>
             <View style={styles.infoItem}>
               <Text style={styles.infoLabel}>Version</Text>
-              <Text style={styles.infoValue}>1.0.0</Text>
+              <Text style={styles.infoValue}>{Constants.expoConfig?.version}</Text>
             </View>
             <View style={styles.infoItem}>
               <Text style={styles.infoLabel}>Build</Text>
-              <Text style={styles.infoValue}>2025.1</Text>
+              <Text style={styles.infoValue}>
+                {formatBuildDate(Constants.expoConfig?.extra?.buildDate)}
+              </Text>
             </View>
             {/* Storage Usage Info */}
             <View style={styles.infoItem}>

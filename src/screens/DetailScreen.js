@@ -25,23 +25,39 @@ const DetailScreen = ({ route, navigation }) => {
   const [recommendations, setRecommendations] = useState([]); // State for recommendations
   const [loadingRecommendations, setLoadingRecommendations] = useState(false); // State for recommendation loading
 
+  const today = new Date();
+  today.setHours(0, 0, 0, 0); // Normalize today's date to compare with air_dates
+
   useEffect(() => {
     const fetchDetails = async () => {
       try {
         setLoading(true);
         setRecommendations([]); // Reset recommendations
         setDisplayedEpisodesCount(25); // Reset count on media change
-        
+        setSeasonDetails(null); // Reset season details
+        setSelectedSeason(null); // Reset selected season
+
         if (mediaType === 'tv') {
-          // Fetch TV show details
           const mediaDetails = await fetchTVShowDetails(mediaId);
-          setDetails(mediaDetails);
           
-          // Fetch first season by default
-          if (mediaDetails.seasons && mediaDetails.seasons.length > 0) {
-            const season = await fetchSeasonDetails(mediaId, 1);
-            setSeasonDetails(season);
-            // No need to set displayedEpisodesCount here, it's reset above
+          // Filter out seasons that haven't aired yet or are "Specials" (season_number 0)
+          const validSeasons = mediaDetails.seasons
+            ? mediaDetails.seasons.filter(s => s.season_number > 0 && s.air_date && new Date(s.air_date) <= today)
+            : [];
+          
+          mediaDetails.seasons = validSeasons; // Update details with filtered seasons
+          setDetails(mediaDetails);
+
+          if (validSeasons.length > 0) {
+            // Default to the first available released season
+            const firstReleasedSeasonNumber = validSeasons[0].season_number;
+            setSelectedSeason(firstReleasedSeasonNumber);
+            const seasonData = await fetchSeasonDetails(mediaId, firstReleasedSeasonNumber);
+            // Filter episodes within the fetched season
+            if (seasonData && seasonData.episodes) {
+              seasonData.episodes = seasonData.episodes.filter(ep => ep.air_date && new Date(ep.air_date) <= today);
+            }
+            setSeasonDetails(seasonData);
           }
         } else {
           // Fetch movie details
@@ -63,6 +79,10 @@ const DetailScreen = ({ route, navigation }) => {
     };
 
     fetchDetails();
+
+    return () => {
+      // Intentionally left blank, was console.log('[DetailScreen] Unmounted');
+    };
   }, [mediaId, mediaType]);
 
   const handleSeasonChange = async (seasonNumber) => {
@@ -70,8 +90,12 @@ const DetailScreen = ({ route, navigation }) => {
       setLoading(true);
       setSelectedSeason(seasonNumber);
       setDisplayedEpisodesCount(25); // Reset count on season change
-      const season = await fetchSeasonDetails(mediaId, seasonNumber);
-      setSeasonDetails(season);
+      const seasonData = await fetchSeasonDetails(mediaId, seasonNumber);
+      // Filter episodes within the newly fetched season
+      if (seasonData && seasonData.episodes) {
+        seasonData.episodes = seasonData.episodes.filter(ep => ep.air_date && new Date(ep.air_date) <= today);
+      }
+      setSeasonDetails(seasonData);
     } catch (error) {
       console.error('Error fetching season details:', error);
     } finally {
@@ -81,7 +105,7 @@ const DetailScreen = ({ route, navigation }) => {
   };
 
   const handleEpisodePress = (episode) => {
-    navigation.navigate('VideoPlayer', {
+    navigation.replace('VideoPlayer', {
       mediaId: mediaId,
       mediaType: 'tv',
       season: selectedSeason,
@@ -93,7 +117,7 @@ const DetailScreen = ({ route, navigation }) => {
   };
   
   const handlePlayMovie = () => {
-    navigation.navigate('VideoPlayer', {
+    navigation.replace('VideoPlayer', {
       mediaId: mediaId,
       mediaType: 'movie',
       title: details.title || title,
@@ -116,7 +140,7 @@ const DetailScreen = ({ route, navigation }) => {
     // Navigate to the DetailScreen for the recommended item
     // Determine mediaType based on presence of title/name if not explicitly available
     const recommendedMediaType = item.media_type || (item.title ? 'movie' : 'tv'); 
-    navigation.push('Detail', { // Use push to allow navigating to another detail screen
+    navigation.push('DetailScreen', { // Use push to allow navigating to another detail screen
       mediaId: item.id,
       mediaType: recommendedMediaType,
       title: recommendedMediaType === 'movie' ? item.title : item.name,
@@ -200,9 +224,12 @@ const DetailScreen = ({ route, navigation }) => {
     ? details.genres.map(genre => genre.name)
     : [];
 
-  const episodesToShow = seasonDetails?.episodes?.slice(0, displayedEpisodesCount) || [];
-  const totalEpisodes = seasonDetails?.episodes?.length || 0;
-  const showLoadMoreButton = totalEpisodes > displayedEpisodesCount;
+  // Ensure episodes are filtered by air_date before slicing for display
+  const allReleasedEpisodesInSeason = seasonDetails?.episodes?.filter(ep => ep.air_date && new Date(ep.air_date) <= today) || [];
+  const episodesToShow = allReleasedEpisodesInSeason.slice(0, displayedEpisodesCount);
+  const totalReleasedEpisodesInSeason = allReleasedEpisodesInSeason.length;
+  const showLoadMoreButton = totalReleasedEpisodesInSeason > displayedEpisodesCount;
+
 
   return (
     <SafeAreaView style={styles.container} edges={[]}>
@@ -225,13 +252,16 @@ const DetailScreen = ({ route, navigation }) => {
           <View style={styles.headerContent}>
             <Text style={styles.title}>{displayTitle}</Text>
             <View style={styles.infoRow}>
-              {details.vote_average && (
-                <Text style={styles.rating}>
-                  {details.vote_average.toFixed(1)} ★
-                </Text>
-              )}
+              <Text style={styles.rating}>
+                {details.vote_average ? details.vote_average.toFixed(1) : "N/A"} ★
+              </Text>
               <Text style={styles.year}>{releaseYear}</Text>
-              
+              {details.production_countries && details.production_countries.length > 0 && (
+                <Image
+                  source={{ uri: `https://flagcdn.com/w40/${details.production_countries[0].iso_3166_1.toLowerCase()}.png` }}
+                  style={styles.countryFlag}
+                />
+              )}
               {mediaType === 'tv' && details.number_of_seasons && (
                 <Text style={styles.seasons}>
                   {details.number_of_seasons} {details.number_of_seasons > 1 ? 'Seasons' : 'Season'}
@@ -255,14 +285,12 @@ const DetailScreen = ({ route, navigation }) => {
               </View>
             ) : null}
             
-            {/* Play button for movies - MOVED HERE */}
             {mediaType === 'movie' && (
               <TouchableOpacity style={styles.playButton} onPress={handlePlayMovie}>
                 <Ionicons name="play" size={18} color="#000" />
                 <Text style={styles.playButtonText}>Play</Text>
               </TouchableOpacity>
             )}
-            {/* Overview removed from here */}
           </View>
         </View>
 
@@ -277,10 +305,8 @@ const DetailScreen = ({ route, navigation }) => {
             <View style={styles.seasonsContainer}>
               <View style={styles.seasonsScrollViewContainer}>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.seasonsScrollContent}>
-                  {details.seasons && details.seasons
-                    .filter(season => season.season_number > 0) // Filter out "Specials" (Season 0)
-                    .map(season => renderSeasonButton(season.season_number))
-                  }
+                  {/* Seasons are already filtered in useEffect and mediaDetails.seasons is updated */}
+                  {details.seasons && details.seasons.map(season => renderSeasonButton(season.season_number))}
                 </ScrollView>
                 <LinearGradient
                   colors={['#000', 'transparent']}
@@ -307,32 +333,41 @@ const DetailScreen = ({ route, navigation }) => {
                 </View>
               )}
               {/* Hide episode list content while loading new season */}
-              {!loading && seasonDetails && seasonDetails.episodes && (
+              {!loading && seasonDetails && ( // Check seasonDetails, episodesToShow handles empty/filtered
                 <>
-                  <Text style={styles.sectionTitle}>
-                    Season {selectedSeason} • {seasonDetails.episodes.length}{' '}
-                    {seasonDetails.episodes.length === 1 ? 'Episode' : 'Episodes'}
-                  </Text>
-                  <FlatList
-                    data={episodesToShow} // Use sliced data
-                    keyExtractor={(item) => `episode-${item.id}`}
-                    renderItem={renderEpisode}
-                    scrollEnabled={false} // Keep this false as it's inside a ScrollView
-                  />
-                  {/* Load More Button */}
-                  {showLoadMoreButton && (
-                    <TouchableOpacity 
-                      style={styles.loadMoreButton} 
-                      onPress={handleLoadMoreEpisodes}
-                    >
-                      <Text style={styles.loadMoreButtonText}>Load More Episodes</Text>
-                    </TouchableOpacity>
+                  {/* episodesToShow is already filtered and sliced */}
+                  {episodesToShow.length > 0 ? (
+                    <>
+                      <Text style={styles.sectionTitle}>
+                        Season {selectedSeason} • {totalReleasedEpisodesInSeason}{' '}
+                        {totalReleasedEpisodesInSeason === 1 ? 'Episode' : 'Episodes'}
+                      </Text>
+                      <FlatList
+                        data={episodesToShow}
+                        keyExtractor={(item) => `episode-${item.id}`}
+                        renderItem={renderEpisode}
+                        scrollEnabled={false}
+                      />
+                      {showLoadMoreButton && (
+                        <TouchableOpacity
+                          style={styles.loadMoreButton}
+                          onPress={handleLoadMoreEpisodes}
+                        >
+                          <Text style={styles.loadMoreButtonText}>Load More Episodes</Text>
+                        </TouchableOpacity>
+                      )}
+                    </>
+                  ) : (
+                     <Text style={styles.noEpisodesText}>No released episodes found for this season.</Text>
                   )}
                 </>
               )}
-              {/* Handle case where season details might be null initially or after error */}
-              {!loading && !seasonDetails && (
-                 <Text style={styles.noEpisodesText}>No episodes found for this season.</Text>
+              {/* Handle case where season details might be null initially or after error, or no seasons at all */}
+              {!loading && !seasonDetails && (!details.seasons || details.seasons.length === 0) && (
+                 <Text style={styles.noEpisodesText}>No released seasons available for this show yet.</Text>
+              )}
+              {!loading && !seasonDetails && details.seasons && details.seasons.length > 0 && !selectedSeason && (
+                 <Text style={styles.noEpisodesText}>Select a season to view episodes.</Text>
               )}
             </View>
           </>
@@ -340,6 +375,7 @@ const DetailScreen = ({ route, navigation }) => {
         
         {/* Movie-specific content */}
         {mediaType === 'movie' && (
+          ((details.credits && details.credits.cast && details.credits.cast.length > 0) || recommendations.length > 0 || loadingRecommendations) ? (
           <>
             {/* Cast Section */}
             {details.credits && details.credits.cast && details.credits.cast.length > 0 && (
@@ -365,8 +401,6 @@ const DetailScreen = ({ route, navigation }) => {
                 </ScrollView>
               </View>
             )}
-
-            {/* Recommendations Section */}
             {recommendations.length > 0 && (
               <View style={styles.recommendationsSection}>
                 <Text style={styles.sectionTitle}>More Like This</Text>
@@ -380,13 +414,13 @@ const DetailScreen = ({ route, navigation }) => {
                 />
               </View>
             )}
-            {/* Optional: Show loading indicator for recommendations */}
             {loadingRecommendations && (
               <View style={styles.loadingRecommendationsContainer}>
                 <ActivityIndicator size="small" color="#E50914" />
               </View>
             )}
           </>
+          ) : null
         )}
       </ScrollView>
     </SafeAreaView>
@@ -454,6 +488,12 @@ const styles = StyleSheet.create({
     color: '#aaa',
     marginRight: 12,
     fontSize: 14,
+  },
+  countryFlag: {
+    width: 27,
+    height: 18,
+    borderRadius: 3,
+    marginRight: 8,
   },
   seasons: {
     color: '#aaa',

@@ -3,10 +3,9 @@ import { View, StyleSheet, ActivityIndicator, BackHandler, Text, TouchableOpacit
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import * as ScreenOrientation from 'expo-screen-orientation';
-import * as SystemUI from 'expo-system-ui';
 import * as Brightness from 'expo-brightness';
 import Slider from '@react-native-community/slider';
-import { VideoView, useVideoPlayer } from 'expo-video';
+import { VideoView, useVideoPlayer, RemotePlaybackButton } from 'expo-video';
 import { WebView } from 'react-native-webview';
 import { fetchTVShowDetails, fetchSeasonDetails } from '../api/tmdbApi';
 import { saveWatchProgress, getWatchProgress, getCachedStreamUrl, saveStreamUrl, getAutoPlaySetting } from '../utils/storage';
@@ -20,7 +19,6 @@ import { GestureHandlerRootView, GestureDetector, Gesture } from 'react-native-g
 import { runOnJS } from 'react-native-reanimated';
 
 // Constants for auto-play
-const AUTO_PLAY_COUNTDOWN_SECONDS = 10; // Kept for reference, though countdown UI is removed
 const VIDEO_END_THRESHOLD_SECONDS = 45; // Show button 45 secs before end
 
 const VideoPlayerScreen = ({ route }) => {
@@ -117,7 +115,10 @@ const VideoPlayerScreen = ({ route }) => {
 
   const player = useVideoPlayer({
     headers: getStreamHeaders(),
-    uri: videoUrl
+    uri: videoUrl,
+    metadata: {
+      title: episodeTitle || title
+    }
   });
 
   player.timeUpdateEventInterval = 1;
@@ -823,7 +824,7 @@ const VideoPlayerScreen = ({ route }) => {
         },
         (err) => {
           if (!isMounted) return;
-          console.error("Error extracting stream:", err);
+          //console.error("Error extracting stream:", err);
           setError({ message: "Could not extract video stream." });
           setStreamExtractionComplete(true);
           setLoading(false);
@@ -1317,6 +1318,11 @@ const VideoPlayerScreen = ({ route }) => {
           <Text style={styles.loadingText}>
             {streamExtractionComplete ? 'Loading video...' : 'Extracting video stream...'}
           </Text>
+          {!streamExtractionComplete && (
+            <Text style={styles.loadingSubText}>
+              This may take up to 30 seconds...
+            </Text>
+          )}
         </View>
       )}
 
@@ -1349,6 +1355,7 @@ const VideoPlayerScreen = ({ route }) => {
               style={StyleSheet.absoluteFill} // VideoView fills the scaled Animated.View
               nativeControls={false}
               allowsPictureInPicture={true}
+              allowsExternalPlayback={true}
               resizeMode="contain" // Base resize mode is contain
               // pointerEvents="none" // Prevent VideoView from interfering with gestures on parent Animated.View
             />
@@ -1396,6 +1403,7 @@ const VideoPlayerScreen = ({ route }) => {
             {/* Subtitle Toggle/Selection Buttons */}
             <View style={styles.topRightButtons}>
               {/* Subtitle buttons are now hidden */}
+              {/* <RemotePlaybackButton style={styles.controlButton} /> */}
             </View>
           </SafeAreaView>
 
@@ -1471,6 +1479,7 @@ const styles = StyleSheet.create({
   loaderContainer: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center', backgroundColor: '#000', zIndex: 10 },
   loadingBackButtonContainer: { position: 'absolute', top: 0, left: 0, right: 0, padding: 10, zIndex: 11 },
   loadingText: { color: '#fff', marginTop: 10 },
+  loadingSubText: { color: '#aaa', fontSize: 12, marginTop: 5 },
   bufferingIndicatorContainer: { position: 'absolute', top: '50%', left: '50%', transform: [{ translateX: -15 }, { translateY: -15 }], zIndex: 11, padding: 10, borderRadius: 5, backgroundColor: 'rgba(0, 0, 0, 0.6)' },
   errorContainer: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center', backgroundColor: '#000', zIndex: 10, padding: 20 },
   errorText: { color: '#fff', marginBottom: 10, fontSize: 16, fontWeight: 'bold' },

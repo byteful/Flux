@@ -4,6 +4,8 @@ const CONTINUE_WATCHING_KEY = 'continueWatching';
 const STREAM_CACHE_KEY = 'streamCache';
 const CACHE_EXPIRATION_MS = 3 * 24 * 60 * 60 * 1000; // 3 days expiration
 const AUTO_PLAY_KEY = 'autoPlayEnabled';
+const SEARCH_HISTORY_KEY = 'searchHistory';
+const MAX_SEARCH_HISTORY_ITEMS = 15;
 
 // Save progress for a movie or TV show episode
 export const saveWatchProgress = async (mediaId, data) => {
@@ -150,6 +152,69 @@ export const getAutoPlaySetting = async () => {
   }
 };
 
+// --- Search History Functions ---
+
+// Save a search query to history
+export const saveSearchQuery = async (query) => {
+  if (!query || typeof query !== 'string' || !query.trim()) return false;
+  const trimmedQuery = query.trim();
+  try {
+    const historyString = await AsyncStorage.getItem(SEARCH_HISTORY_KEY);
+    let history = historyString ? JSON.parse(historyString) : [];
+    // Remove existing entry if it's already there to move it to the top
+    history = history.filter(item => item !== trimmedQuery);
+    // Add new query to the beginning
+    history.unshift(trimmedQuery);
+    // Limit history size
+    if (history.length > MAX_SEARCH_HISTORY_ITEMS) {
+      history = history.slice(0, MAX_SEARCH_HISTORY_ITEMS);
+    }
+    await AsyncStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(history));
+    return true;
+  } catch (error) {
+    console.error('Error saving search query:', error);
+    return false;
+  }
+};
+
+// Get search history
+export const getSearchHistory = async () => {
+  try {
+    const historyString = await AsyncStorage.getItem(SEARCH_HISTORY_KEY);
+    return historyString ? JSON.parse(historyString) : [];
+  } catch (error) {
+    console.error('Error getting search history:', error);
+    return [];
+  }
+};
+
+// Remove a specific search query from history
+export const removeSearchQuery = async (queryToRemove) => {
+  if (!queryToRemove || typeof queryToRemove !== 'string' || !queryToRemove.trim()) return false;
+  const trimmedQuery = queryToRemove.trim();
+  try {
+    const historyString = await AsyncStorage.getItem(SEARCH_HISTORY_KEY);
+    let history = historyString ? JSON.parse(historyString) : [];
+    history = history.filter(item => item !== trimmedQuery);
+    await AsyncStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(history));
+    return true;
+  } catch (error) {
+    console.error('Error removing search query:', error);
+    return false;
+  }
+};
+
+// Clear all search history
+export const clearSearchHistory = async () => {
+  try {
+    await AsyncStorage.removeItem(SEARCH_HISTORY_KEY);
+    return true;
+  } catch (error) {
+    console.error('Error clearing search history:', error);
+    return false;
+  }
+};
+
 export default {
   saveWatchProgress,
   getWatchProgress,
@@ -160,4 +225,8 @@ export default {
   clearStreamCache,
   saveAutoPlaySetting,
   getAutoPlaySetting,
+  saveSearchQuery,
+  getSearchHistory,
+  removeSearchQuery,
+  clearSearchHistory,
 };

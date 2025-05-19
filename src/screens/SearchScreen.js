@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -16,13 +16,19 @@ import { useFocusEffect } from '@react-navigation/native';
 import Animated, { useSharedValue, useAnimatedStyle, withTiming } from 'react-native-reanimated';
 import { searchMedia, getImageUrl } from '../api/tmdbApi';
 import { getMediaType } from '../api/vidsrcApi';
+import { saveSearchQuery, getSearchHistory, removeSearchQuery, clearSearchHistory } from '../utils/storage';
 
 const SearchScreen = ({ navigation }) => {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const [noResults, setNoResults] = useState(false);
+  const [searchHistory, setSearchHistory] = useState([]);
+  const [showHistory, setShowHistory] = useState(true);
+  const [listVersion, setListVersion] = useState(0); // Added for FlatList refresh
   const opacity = useSharedValue(0);
+
+  // Removed Mount/Unmount useEffect and Render console.log
 
   const animatedStyle = useAnimatedStyle(() => {
     return {
@@ -32,21 +38,55 @@ const SearchScreen = ({ navigation }) => {
 
   useFocusEffect(
     useCallback(() => {
+      // console.log(`[SearchScreen] FocusEffect START. Query: ${query}, Results length: ${results.length}, ShowHistory: ${showHistory}`);
       opacity.value = 0;
       opacity.value = withTiming(1, { duration: 300 });
+      loadSearchHistory();
+      if (!query.trim()) {
+        setShowHistory(true);
+      }
+      setListVersion(prevVersion => prevVersion + 1); // Increment listVersion
       return () => {
+        // opacity.value = 0; // Optional: Reset opacity on blur
+        // console.log(`[SearchScreen] FocusEffect CLEANUP. Query: ${query}`);
       };
-    }, [opacity])
+    }, [opacity, query])
   );
 
-  const handleSearch = async () => {
-    if (!query.trim()) return;
+  // useEffect to handle showing/hiding history based on query changes
+  // This runs after the initial setup by useFocusEffect
+  useEffect(() => {
+    // console.log(`[SearchScreen] QueryEffect. Query: ${query}, Results length: ${results.length}, Current ShowHistory: ${showHistory}, Will set showHistory: ${!query.trim()}`);
+    if (!query.trim()) {
+      setShowHistory(true);
+      loadSearchHistory(); // Ensure history is fresh when input is empty
+    } else {
+      setShowHistory(false);
+    }
+  }, [query]);
+
+  const loadSearchHistory = async () => {
+    const history = await getSearchHistory();
+    setSearchHistory(history);
+  };
+
+  const handleSearch = async (searchQuery = query) => {
+    const trimmedQuery = searchQuery.trim();
+    if (!trimmedQuery) {
+      setResults([]);
+      setNoResults(false);
+      setShowHistory(true);
+      loadSearchHistory(); // Refresh history view
+      return;
+    }
 
     setLoading(true);
     setNoResults(false);
+    setShowHistory(false); // Hide history when a search is performed
 
     try {
-      const searchResults = await searchMedia(query);
+      await saveSearchQuery(trimmedQuery); // Save successful search
+      const searchResults = await searchMedia(trimmedQuery);
 
       const filteredResults = searchResults.filter(
         (item) =>
@@ -62,7 +102,27 @@ const SearchScreen = ({ navigation }) => {
       setNoResults(true);
     } finally {
       setLoading(false);
+      loadSearchHistory(); // Refresh history list after search
     }
+  };
+
+  const handleQueryChange = (text) => {
+    setQuery(text);
+    // The useEffect above will handle setShowHistory and loadSearchHistory
+    // based on the new query value.
+    // We still need to clear results if text becomes empty here.
+    if (!text.trim()) {
+      setResults([]);
+      setNoResults(false);
+    }
+  };
+
+  const handleClearInput = () => {
+    setQuery('');
+    setResults([]);
+    setNoResults(false);
+    setShowHistory(true);
+    loadSearchHistory();
   };
 
   const handleItemPress = (item) => {
@@ -112,6 +172,30 @@ const SearchScreen = ({ navigation }) => {
     );
   };
 
+  const handleHistoryItemPress = (historyQuery) => {
+    setQuery(historyQuery);
+    handleSearch(historyQuery); // Pass the query directly
+  };
+
+  const handleRemoveHistoryItem = async (historyQuery) => {
+    await removeSearchQuery(historyQuery);
+    loadSearchHistory();
+  };
+
+  const handleClearAllHistory = async () => {
+    await clearSearchHistory();
+    loadSearchHistory();
+  };
+
+  const renderHistoryItem = ({ item }) => (
+    <TouchableOpacity style={styles.historyItem} onPress={() => handleHistoryItemPress(item)}>
+      <Text style={styles.historyItemText}>{item}</Text>
+      <TouchableOpacity onPress={() => handleRemoveHistoryItem(item)} style={styles.historyRemoveIconContainer}>
+        <Ionicons name="close-circle" size={20} color="#888" />
+      </TouchableOpacity>
+    </TouchableOpacity>
+  );
+
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
       <Animated.View style={[styles.animatedContainer, animatedStyle]}>
@@ -129,32 +213,56 @@ const SearchScreen = ({ navigation }) => {
             placeholder="Search movies & TV shows"
             placeholderTextColor="#888"
             value={query}
-            onChangeText={setQuery}
-            onSubmitEditing={handleSearch}
+            onChangeText={handleQueryChange}
+            onSubmitEditing={() => handleSearch()}
             returnKeyType="search"
             autoFocus
-            clearButtonMode="while-editing"
+            clearButtonMode="always"
+            onClear={handleClearInput} // This will be triggered by the native clear button
           />
+          {/* Removed custom clear button to prevent overlap */}
         </View>
 
         {loading ? (
           <View style={styles.centerContent}>
             <ActivityIndicator size="large" color="#E50914" />
           </View>
-        ) : noResults ? (
+        ) : showHistory && searchHistory.length > 0 && results.length === 0 ? (
+          <>
+            <View style={styles.historyHeader}>
+              <Text style={styles.historyHeaderText}>Recent Searches</Text>
+              <TouchableOpacity onPress={handleClearAllHistory}>
+                <Text style={styles.clearAllText}>Clear All</Text>
+              </TouchableOpacity>
+            </View>
+            <FlatList
+              data={searchHistory}
+              renderItem={renderHistoryItem}
+              keyExtractor={(item, index) => `${item}-${index}`}
+              contentContainerStyle={styles.historyList}
+              ItemSeparatorComponent={() => <View style={styles.historySeparator} />}
+            />
+          </>
+        ) : noResults && !showHistory ? (
           <View style={styles.centerContent}>
             <Text style={styles.noResultsText}>No results found for "{query}"</Text>
           </View>
-        ) : (
+        ) : results.length > 0 && !showHistory ? (
           <FlatList
             data={results}
             renderItem={renderSearchResult}
             keyExtractor={(item) => item.id.toString()}
             contentContainerStyle={styles.resultsList}
             ItemSeparatorComponent={() => <View style={styles.separator} />}
+            extraData={listVersion} // Added extraData
           />
+        ) : (
+           !loading && query.trim() === '' && searchHistory.length === 0 && ( // Show if input is empty and no history
+            <View style={styles.centerContent}>
+              <Text style={styles.noResultsText}>Start typing to search for movies and TV shows.</Text>
+            </View>
+          )
         )}
-
       </Animated.View>
     </SafeAreaView>
   );
@@ -196,7 +304,9 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     paddingVertical: 12,
+    // paddingRight: 30, // No longer needed as custom icon is removed
   },
+  // clearIconContainer style is no longer needed
   centerContent: {
     flex: 1,
     justifyContent: 'center',
@@ -251,6 +361,45 @@ const styles = StyleSheet.create({
     backgroundColor: '#333',
     marginVertical: 10,
   },
+  historyHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    marginTop: 10,
+    marginBottom: 5,
+  },
+  historyHeaderText: {
+    color: '#ccc',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  historyList: {
+    paddingHorizontal: 16,
+  },
+  historyItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 12,
+  },
+  historyItemText: {
+    color: '#fff',
+    fontSize: 16,
+    flex: 1, // Allow text to take available space
+  },
+  historyRemoveIconContainer: {
+    paddingLeft: 10, // Add some space before the icon
+  },
+  historySeparator: {
+    height: 1,
+    backgroundColor: '#222', // Darker separator for history
+  },
+  clearAllText: {
+    color: '#E50914', // Theme color for actionable text
+    fontSize: 14,
+    fontWeight: 'bold',
+  }
 });
 
 export default SearchScreen;
