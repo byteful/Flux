@@ -1,25 +1,32 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const CONTINUE_WATCHING_KEY = 'continueWatching';
+const EPISODE_PROGRESS_KEY_PREFIX = 'episodeProgress_';
 const STREAM_CACHE_KEY = 'streamCache';
 const CACHE_EXPIRATION_MS = 3 * 24 * 60 * 60 * 1000; // 3 days expiration
 const AUTO_PLAY_KEY = 'autoPlayEnabled';
 const SEARCH_HISTORY_KEY = 'searchHistory';
 const MAX_SEARCH_HISTORY_ITEMS = 15;
 
-// Save progress for a movie or TV show episode
 export const saveWatchProgress = async (mediaId, data) => {
   try {
     const watchDataString = await AsyncStorage.getItem(CONTINUE_WATCHING_KEY);
     const watchData = watchDataString ? JSON.parse(watchDataString) : {};
-    
-    // Use mediaId as the key to ensure only one entry per show/movie
+
     watchData[mediaId] = {
-      ...data, // This data includes specific episode details
+      ...data,
       lastWatched: new Date().toISOString(),
     };
-    
+
     await AsyncStorage.setItem(CONTINUE_WATCHING_KEY, JSON.stringify(watchData));
+
+    if (data.mediaType === 'tv' && data.season && data.episode) {
+      await saveEpisodeWatchProgress(mediaId, data.season, data.episode, {
+        position: data.position,
+        duration: data.duration,
+        lastWatched: watchData[mediaId].lastWatched,
+      });
+    }
     return true;
   } catch (error) {
     console.error('Error saving watch progress:', error);
@@ -27,19 +34,72 @@ export const saveWatchProgress = async (mediaId, data) => {
   }
 };
 
-// Get progress for a specific movie or TV show (returns the last watched episode's data)
 export const getWatchProgress = async (mediaId) => {
   try {
     const watchDataString = await AsyncStorage.getItem(CONTINUE_WATCHING_KEY);
     const watchData = watchDataString ? JSON.parse(watchDataString) : {};
     return watchData[mediaId] || null;
   } catch (error) {
-    console.error('Error getting watch progress:', error);
+    console.error('Error getting watch progress for continue watching:', error);
     return null;
   }
 };
 
-// Get all continue watching items, sorted by most recently watched
+const getEpisodeProgressKey = (mediaId, seasonNumber, episodeNumber) => {
+  return `${EPISODE_PROGRESS_KEY_PREFIX}tv_${mediaId}_s${seasonNumber}_e${episodeNumber}`;
+};
+
+export const saveEpisodeWatchProgress = async (mediaId, seasonNumber, episodeNumber, progressData) => {
+  try {
+    const key = getEpisodeProgressKey(mediaId, seasonNumber, episodeNumber);
+    const dataToSave = {
+      ...progressData,
+      lastWatched: progressData.lastWatched || new Date().toISOString(),
+    };
+    await AsyncStorage.setItem(key, JSON.stringify(dataToSave));
+    return true;
+  } catch (error) {
+    console.error(`Error saving episode watch progress for S${seasonNumber}E${episodeNumber}:`, error);
+    return false;
+  }
+};
+
+export const getEpisodeWatchProgress = async (mediaId, seasonNumber, episodeNumber) => {
+  try {
+    const key = getEpisodeProgressKey(mediaId, seasonNumber, episodeNumber);
+    const progressString = await AsyncStorage.getItem(key);
+    return progressString ? JSON.parse(progressString) : null;
+  } catch (error) {
+    console.error(`Error getting episode watch progress for S${seasonNumber}E${episodeNumber}:`, error);
+    return null;
+  }
+};
+
+export const getShowWatchProgress = async (mediaId) => {
+  try {
+    const keys = await AsyncStorage.getAllKeys();
+    const episodeProgressKeys = keys.filter(key => key.startsWith(`${EPISODE_PROGRESS_KEY_PREFIX}tv_${mediaId}_`));
+    const progressEntries = await AsyncStorage.multiGet(episodeProgressKeys);
+    
+    const showProgress = {};
+    progressEntries.forEach(([key, value]) => {
+      if (value) {
+        const parts = key.replace(`${EPISODE_PROGRESS_KEY_PREFIX}tv_${mediaId}_s`, '').split('_e');
+        const seasonNumber = parseInt(parts[0], 10);
+        const episodeNumber = parseInt(parts[1], 10);
+        if (!showProgress[seasonNumber]) {
+          showProgress[seasonNumber] = {};
+        }
+        showProgress[seasonNumber][episodeNumber] = JSON.parse(value);
+      }
+    });
+    return showProgress;
+  } catch (error) {
+    console.error('Error getting show watch progress:', error);
+    return {};
+  }
+};
+
 export const getContinueWatchingList = async () => {
   try {
     const watchDataString = await AsyncStorage.getItem(CONTINUE_WATCHING_KEY);
@@ -219,6 +279,9 @@ export default {
   saveWatchProgress,
   getWatchProgress,
   getContinueWatchingList,
+  saveEpisodeWatchProgress,
+  getEpisodeWatchProgress,
+  getShowWatchProgress,
   removeFromContinueWatching,
   saveStreamUrl,
   getCachedStreamUrl,

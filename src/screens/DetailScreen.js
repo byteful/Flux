@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { fetchTVShowDetails, fetchSeasonDetails, fetchMovieDetails, getImageUrl, fetchMovieRecommendations } from '../api/tmdbApi';
+import { getShowWatchProgress, getEpisodeWatchProgress } from '../utils/storage'; // Import progress functions
 import { Ionicons } from '@expo/vector-icons';
 import MediaCard from '../components/MediaCard';
 
@@ -20,10 +21,13 @@ const DetailScreen = ({ route, navigation }) => {
   const [details, setDetails] = useState(null);
   const [selectedSeason, setSelectedSeason] = useState(1);
   const [seasonDetails, setSeasonDetails] = useState(null);
+  const [episodeProgress, setEpisodeProgress] = useState({}); // To store progress for all episodes
   const [loading, setLoading] = useState(true);
-  const [displayedEpisodesCount, setDisplayedEpisodesCount] = useState(25); // State for displayed episodes count
-  const [recommendations, setRecommendations] = useState([]); // State for recommendations
-  const [loadingRecommendations, setLoadingRecommendations] = useState(false); // State for recommendation loading
+  const [displayedEpisodesCount, setDisplayedEpisodesCount] = useState(25);
+  const [recommendations, setRecommendations] = useState([]);
+  const [loadingRecommendations, setLoadingRecommendations] = useState(false);
+  const flatListRef = useRef(null); // Ref for FlatList
+  const [initialScrollDone, setInitialScrollDone] = useState(false); // To prevent multiple scrolls
 
   const today = new Date();
   today.setHours(0, 0, 0, 0); // Normalize today's date to compare with air_dates
@@ -33,34 +37,64 @@ const DetailScreen = ({ route, navigation }) => {
       try {
         setLoading(true);
         setRecommendations([]); // Reset recommendations
-        setDisplayedEpisodesCount(25); // Reset count on media change
-        setSeasonDetails(null); // Reset season details
-        setSelectedSeason(null); // Reset selected season
+        setDisplayedEpisodesCount(25);
+        setSeasonDetails(null);
+        setSelectedSeason(null);
+        setEpisodeProgress({});
+        setInitialScrollDone(false);
 
         if (mediaType === 'tv') {
           const mediaDetails = await fetchTVShowDetails(mediaId);
-          
-          // Filter out seasons that haven't aired yet or are "Specials" (season_number 0)
           const validSeasons = mediaDetails.seasons
             ? mediaDetails.seasons.filter(s => s.season_number > 0 && s.air_date && new Date(s.air_date) <= today)
             : [];
-          
-          mediaDetails.seasons = validSeasons; // Update details with filtered seasons
+          mediaDetails.seasons = validSeasons;
           setDetails(mediaDetails);
 
-          if (validSeasons.length > 0) {
-            // Default to the first available released season
-            const firstReleasedSeasonNumber = validSeasons[0].season_number;
-            setSelectedSeason(firstReleasedSeasonNumber);
-            const seasonData = await fetchSeasonDetails(mediaId, firstReleasedSeasonNumber);
-            // Filter episodes within the fetched season
+          const progress = await getShowWatchProgress(mediaId);
+          setEpisodeProgress(progress);
+
+          let mostRecentEpisodeInfo = null;
+          let maxLastWatchedTime = 0;
+
+          if (Object.keys(progress).length > 0) {
+            for (const seasonNum in progress) {
+              for (const episodeNum in progress[seasonNum]) {
+                const episodeData = progress[seasonNum][episodeNum];
+                if (episodeData.lastWatched && new Date(episodeData.lastWatched).getTime() > maxLastWatchedTime) {
+                  maxLastWatchedTime = new Date(episodeData.lastWatched).getTime();
+                  mostRecentEpisodeInfo = {
+                    season: parseInt(seasonNum, 10),
+                    episode: parseInt(episodeNum, 10),
+                  };
+                }
+              }
+            }
+          }
+
+          let seasonToLoad = null;
+          if (mostRecentEpisodeInfo) {
+            seasonToLoad = mostRecentEpisodeInfo.season;
+            // Check if this season is valid and released
+            const seasonExists = validSeasons.some(s => s.season_number === seasonToLoad);
+            if (!seasonExists) {
+                seasonToLoad = null; // Fallback if the season from progress isn't in validSeasons
+            }
+          }
+          
+          if (!seasonToLoad && validSeasons.length > 0) {
+            seasonToLoad = validSeasons[0].season_number; // Default to first valid season
+          }
+
+          if (seasonToLoad !== null) {
+            setSelectedSeason(seasonToLoad);
+            const seasonData = await fetchSeasonDetails(mediaId, seasonToLoad);
             if (seasonData && seasonData.episodes) {
               seasonData.episodes = seasonData.episodes.filter(ep => ep.air_date && new Date(ep.air_date) <= today);
             }
             setSeasonDetails(seasonData);
           }
         } else {
-          // Fetch movie details
           const mediaDetails = await fetchMovieDetails(mediaId);
           setDetails(mediaDetails);
           // Fetch movie recommendations AFTER details are fetched
@@ -80,16 +114,15 @@ const DetailScreen = ({ route, navigation }) => {
 
     fetchDetails();
 
-    return () => {
-      // Intentionally left blank, was console.log('[DetailScreen] Unmounted');
-    };
+    return () => {};
   }, [mediaId, mediaType]);
 
   const handleSeasonChange = async (seasonNumber) => {
     try {
       setLoading(true);
       setSelectedSeason(seasonNumber);
-      setDisplayedEpisodesCount(25); // Reset count on season change
+      setDisplayedEpisodesCount(25);
+      setInitialScrollDone(false); // Allow scrolling for newly selected season
       const seasonData = await fetchSeasonDetails(mediaId, seasonNumber);
       // Filter episodes within the newly fetched season
       if (seasonData && seasonData.episodes) {
@@ -147,6 +180,47 @@ const DetailScreen = ({ route, navigation }) => {
     });
   };
 
+  useEffect(() => {
+    if (mediaType === 'tv' && !initialScrollDone && seasonDetails && seasonDetails.episodes && episodeProgress && flatListRef.current) {
+      let mostRecentEpisodeNumber = null;
+      let maxLastWatchedTime = 0;
+      const currentSeasonProgress = episodeProgress[selectedSeason];
+
+      if (currentSeasonProgress) {
+        for (const epNum in currentSeasonProgress) {
+          const epData = currentSeasonProgress[epNum];
+          if (epData.lastWatched && new Date(epData.lastWatched).getTime() > maxLastWatchedTime) {
+            maxLastWatchedTime = new Date(epData.lastWatched).getTime();
+            mostRecentEpisodeNumber = parseInt(epNum, 10);
+          }
+        }
+      }
+      
+      if (mostRecentEpisodeNumber !== null) {
+        const targetIndex = episodesToShow.findIndex(ep => ep.episode_number === mostRecentEpisodeNumber);
+        if (targetIndex !== -1) {
+          // Check if the item is within the currently rendered items or if we need to load more
+          if (targetIndex < displayedEpisodesCount) {
+             flatListRef.current.scrollToIndex({
+              index: targetIndex,
+              animated: true,
+              viewPosition: 0.1, // Try to position it near the top
+            });
+            setInitialScrollDone(true);
+          } else {
+            // If the target episode is beyond the currently displayed ones,
+            // we might need to load more first, or decide not to scroll.
+            // For now, we'll only scroll if it's in the visible range.
+            // A more complex solution might involve loading more then scrolling.
+          }
+        }
+      } else {
+        // No progress for this season, or no progress at all, don't scroll.
+        setInitialScrollDone(true); // Mark as done to prevent re-checks
+      }
+    }
+  }, [seasonDetails, episodeProgress, episodesToShow, mediaType, initialScrollDone, selectedSeason, displayedEpisodesCount]);
+
   // Modify the condition: Only show full-screen loader on initial load
   if (loading && !details) {
     return (
@@ -176,28 +250,48 @@ const DetailScreen = ({ route, navigation }) => {
     </TouchableOpacity>
   );
 
-  const renderEpisode = ({ item }) => (
-    <TouchableOpacity style={styles.episodeItem} onPress={() => handleEpisodePress(item)}>
-      <View style={styles.episodeRow}>
-        {item.still_path ? (
-          <Image
-            source={{ uri: getImageUrl(item.still_path) }}
-            style={styles.episodeImage}
-          />
-        ) : (
-          <View style={styles.episodeImagePlaceholder} />
-        )}
-        <View style={styles.episodeInfo}>
-          <Text style={styles.episodeNumber}>Episode {item.episode_number}</Text>
-          <Text style={styles.episodeTitle}>{item.name}</Text>
-          <Text style={styles.episodeOverview} numberOfLines={2}>
-            {item.overview || 'No description available.'}
-          </Text>
+  const renderEpisode = ({ item }) => {
+    const progress = episodeProgress?.[selectedSeason]?.[item.episode_number];
+    let progressPercent = 0;
+    if (progress && progress.duration > 0) {
+      progressPercent = (progress.position / progress.duration);
+    }
+
+    return (
+      <TouchableOpacity style={styles.episodeItem} onPress={() => handleEpisodePress(item)}>
+        <View style={styles.episodeRow}>
+          <View style={styles.episodeImageContainer}>
+            {item.still_path ? (
+              <Image
+                source={{ uri: getImageUrl(item.still_path) }}
+                style={styles.episodeImage}
+              />
+            ) : (
+              <View style={styles.episodeImagePlaceholder} />
+            )}
+            {progressPercent > 0 && progressPercent < 1 && (
+              <View style={styles.progressBarContainer}>
+                <View style={[styles.progressBar, { width: `${progressPercent * 100}%` }]} />
+              </View>
+            )}
+             {progressPercent >= 1 && ( // Show checkmark if fully watched
+              <View style={styles.watchedOverlay}>
+                <Ionicons name="checkmark-circle" size={24} color="rgba(255, 255, 255, 0.8)" />
+              </View>
+            )}
+          </View>
+          <View style={styles.episodeInfo}>
+            <Text style={styles.episodeNumber}>Episode {item.episode_number}</Text>
+            <Text style={styles.episodeTitle}>{item.name}</Text>
+            <Text style={styles.episodeOverview} numberOfLines={2}>
+              {item.overview || 'No description available.'}
+            </Text>
+          </View>
         </View>
-      </View>
-    </TouchableOpacity>
-  );
-  
+      </TouchableOpacity>
+    );
+  };
+
   const renderRecommendation = ({ item }) => (
     <MediaCard 
       item={item} 
@@ -229,7 +323,6 @@ const DetailScreen = ({ route, navigation }) => {
   const episodesToShow = allReleasedEpisodesInSeason.slice(0, displayedEpisodesCount);
   const totalReleasedEpisodesInSeason = allReleasedEpisodesInSeason.length;
   const showLoadMoreButton = totalReleasedEpisodesInSeason > displayedEpisodesCount;
-
 
   return (
     <SafeAreaView style={styles.container} edges={[]}>
@@ -343,10 +436,19 @@ const DetailScreen = ({ route, navigation }) => {
                         {totalReleasedEpisodesInSeason === 1 ? 'Episode' : 'Episodes'}
                       </Text>
                       <FlatList
+                        ref={flatListRef}
                         data={episodesToShow}
                         keyExtractor={(item) => `episode-${item.id}`}
                         renderItem={renderEpisode}
-                        scrollEnabled={false}
+                        scrollEnabled={false} // The parent ScrollView handles scrolling
+                        initialNumToRender={displayedEpisodesCount}
+                        getItemLayout={(data, index) => {
+                          const itemHeight = (styles.episodeImageContainer?.height || 70) +
+                                           (styles.episodeItem?.paddingBottom || 0) +
+                                           (styles.episodeItem?.borderBottomWidth || 0) +
+                                           (styles.episodeItem?.marginBottom || 0);
+                          return { length: itemHeight, offset: itemHeight * index, index };
+                        }}
                       />
                       {showLoadMoreButton && (
                         <TouchableOpacity
@@ -362,7 +464,6 @@ const DetailScreen = ({ route, navigation }) => {
                   )}
                 </>
               )}
-              {/* Handle case where season details might be null initially or after error, or no seasons at all */}
               {!loading && !seasonDetails && (!details.seasons || details.seasons.length === 0) && (
                  <Text style={styles.noEpisodesText}>No released seasons available for this show yet.</Text>
               )}
@@ -372,8 +473,7 @@ const DetailScreen = ({ route, navigation }) => {
             </View>
           </>
         )}
-        
-        {/* Movie-specific content */}
+
         {mediaType === 'movie' && (
           ((details.credits && details.credits.cast && details.credits.cast.length > 0) || recommendations.length > 0 || loadingRecommendations) ? (
           <>
@@ -504,12 +604,6 @@ const styles = StyleSheet.create({
     color: '#aaa',
     fontSize: 14,
   },
-  genres: { // This style might be unused now or could be repurposed/removed
-    color: '#ccc',
-    fontSize: 14,
-    marginBottom: 16,
-    lineHeight: 20,
-  },
   genreBadgeContainer: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -630,26 +724,51 @@ const styles = StyleSheet.create({
   },
   episodeRow: {
     flexDirection: 'row',
-    alignItems: 'center', // Align items vertically
+    alignItems: 'center',
   },
-  episodeImage: {
-    width: 120, // Slightly smaller image
-    height: 70,
-    borderRadius: 4,
-    marginRight: 12, // Add margin to the right
-  },
-  episodeImagePlaceholder: {
+  episodeImageContainer: { // New container for image and progress bar
     width: 120,
     height: 70,
-    backgroundColor: '#333',
     borderRadius: 4,
     marginRight: 12,
+    position: 'relative', // For absolute positioning of progress bar
+    overflow: 'hidden', // Ensures progress bar doesn't exceed image bounds
+  },
+  episodeImage: {
+    width: '100%',
+    height: '100%',
+  },
+  episodeImagePlaceholder: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#333',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  progressBarContainer: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 5, // Height of the progress bar
+    backgroundColor: 'rgba(0,0,0,0.5)', // Semi-transparent background for the bar container
+  },
+  progressBar: {
+    height: '100%',
+    backgroundColor: '#E50914', // Netflix red
+  },
+  watchedOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.3)',
     justifyContent: 'center',
     alignItems: 'center',
   },
   episodeInfo: {
     flex: 1,
-    // marginLeft: 10, // Removed margin
     justifyContent: 'center',
   },
   episodeNumber: {

@@ -60,7 +60,6 @@ const styles = StyleSheet.create({
     height: height * 0.6,
     borderRadius: 15,
     overflow: 'hidden',
-    marginHorizontal: 15,
     marginTop: 10,
     marginBottom: 20,
     elevation: 5,
@@ -72,7 +71,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     maxWidth: 700, // Added max width
     alignSelf: 'center', // Center the card
-    width: '100%', // Ensure it still tries to fill available width up to maxWidth
+    width: '95%', // Ensure it still tries to fill available width up to maxWidth
   },
   backgroundImage: {
     width: '100%',

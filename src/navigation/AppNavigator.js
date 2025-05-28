@@ -1,11 +1,10 @@
 import React from 'react';
-import { NavigationContainer, DarkTheme } from '@react-navigation/native'; // Import DarkTheme
-import { createStackNavigator, CardStyleInterpolators } from '@react-navigation/stack'; // Import CardStyleInterpolators
+import { NavigationContainer, DarkTheme } from '@react-navigation/native';
+import { createStackNavigator, CardStyleInterpolators } from '@react-navigation/stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
 import { View, Text } from 'react-native';
 
-// Import screens
 import HomeScreen from '../screens/HomeScreen';
 import VideoPlayerScreen from '../screens/VideoPlayerScreen';
 import DetailScreen from '../screens/DetailScreen';
@@ -45,14 +44,14 @@ const MainStack = () => {
       <Stack.Screen 
         name="VideoPlayer" 
         component={VideoPlayerScreen} 
-        options={{ headerShown: false, autoHideHomeIndicator: true }}
+        options={{ headerShown: false, autoHideHomeIndicator: true, gestureEnabled: false }}
       />
       <Stack.Screen 
         name="DetailScreen" 
         component={DetailScreen}
         options={({ route }) => ({
           title: route.params?.title || 'Details',
-          headerBackTitle: '', // Add this line
+          headerBackTitle: '',
         })}
       />
     </Stack.Navigator>
@@ -75,11 +74,6 @@ const MainTabs = () => {
         tabBarLabelStyle: {
           fontSize: 12,
         },
-        // headerStyle and headerTintColor are no longer needed here
-        // headerStyle: {
-        //   backgroundColor: '#000',
-        // },
-        // headerTintColor: '#fff',
       }}
     >
       <Tab.Screen 

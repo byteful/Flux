@@ -17,7 +17,6 @@ import { Platform } from 'react-native';
 export const extractM3U8Stream = (tmdbId, type, season, episode, onStreamFound, onError, onManualInterventionRequired) => {
     // Generate the embed URL using vidsrcApi
     const embedUrl = getStreamingUrl(tmdbId, type, season, episode);
-    console.log('[StreamExtractor] Embed URL:', embedUrl);
 
     // JavaScript to inject into the WebView to intercept and extract m3u8 links
     const injectedJavaScript = `
@@ -130,8 +129,7 @@ export const extractM3U8Stream = (tmdbId, type, season, episode, onStreamFound, 
               // Cross-origin issues prevent access
             }
           });
-        } catch (e) {
-        }
+        } catch (e) {}
       }
       
       // Handle messages from iframes
@@ -216,7 +214,6 @@ export const extractM3U8Stream = (tmdbId, type, season, episode, onStreamFound, 
         'Origin': 'https://vidsrc.su',
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     };
-    console.log('[StreamExtractor] Using headers:', headers);
 
     const webViewConfig = {
         source: {
@@ -228,14 +225,12 @@ export const extractM3U8Stream = (tmdbId, type, season, episode, onStreamFound, 
             if (done) return;
             try {
                 const data = JSON.parse(event.nativeEvent.data);
-                console.log('[StreamExtractor] WebView Message:', data);
 
                 if (data.type === 'stream' && data.url) {
-                    console.log('[StreamExtractor] Stream found:', data.url);
                     onStreamFound(data.url);
                     done = true;
                 } else if (data.type === 'stream_candidate') {
-                    console.log('[StreamExtractor] Stream candidate:', data.url);
+                    // Stream candidate found, could be logged or used for heuristics if needed
                 } else if (data.type === 'error') {
                     console.error('[StreamExtractor] Error from WebView JS:', data.message);
                     onError(new Error(data.message));
@@ -255,9 +250,7 @@ export const extractM3U8Stream = (tmdbId, type, season, episode, onStreamFound, 
         },
         onHttpError: (syntheticEvent) => {
             const { nativeEvent } = syntheticEvent;
-            // console.error('[StreamExtractor] WebView onHttpError:', nativeEvent); // Removed debug log
             if (nativeEvent.statusCode === 403 && onManualInterventionRequired) {
-                // console.log('[StreamExtractor] HTTP 403 detected, calling onManualInterventionRequired.'); // Removed debug log
                 onManualInterventionRequired(embedUrl); // Pass URL for context
             } else {
                 onError(new Error(`WebView HTTP error: ${nativeEvent.statusCode} on ${nativeEvent.url}`));

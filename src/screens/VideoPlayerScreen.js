@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { View, StyleSheet, ActivityIndicator, BackHandler, Text, TouchableOpacity, Platform, PanResponder, Animated, Easing, Modal, FlatList, Dimensions, AppState, Image } from 'react-native';
+import { Picker } from '@react-native-picker/picker';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import * as ScreenOrientation from 'expo-screen-orientation';
@@ -8,7 +9,7 @@ import Slider from '@react-native-community/slider';
 import { VideoView, useVideoPlayer, RemotePlaybackButton } from 'expo-video';
 import { WebView } from 'react-native-webview';
 import { fetchTVShowDetails, fetchSeasonDetails } from '../api/tmdbApi';
-import { saveWatchProgress, getWatchProgress, getCachedStreamUrl, saveStreamUrl, getAutoPlaySetting } from '../utils/storage';
+import { saveWatchProgress, getWatchProgress, getCachedStreamUrl, saveStreamUrl, getAutoPlaySetting, getEpisodeWatchProgress } from '../utils/storage';
 import { extractM3U8Stream } from '../utils/streamExtractor';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
@@ -26,14 +27,11 @@ const VideoPlayerScreen = ({ route }) => {
   const navigationRef = useRef(navigation);
   const progressBarRef = useRef(null);
   const opacityAnim = useRef(new Animated.Value(0)).current;
-  // Removed autoPlayProgressAnim
-  // Removed autoPlayTimerRef
   const nextEpisodeDetailsRef = useRef(null); // Ref to store next episode details
   const episodesModalOrientationListenerRef = useRef(null); // Ref for the modal's orientation listener
   const lastPositionRef = useRef(0); // Ref for manual end detection
   const lastPositionTimeRef = useRef(0); // Ref for manual end detection
   const manualFinishTriggeredRef = useRef(false); // Ref for manual end detection flag
-  // Removed prevShowNextEpisodeButtonRef (no longer needed for countdown trigger)
 
   const {
     mediaId,
@@ -63,7 +61,6 @@ const VideoPlayerScreen = ({ route }) => {
   const [duration, setDuration] = useState(0);
   const [position, setPosition] = useState(0);
   const [resumeTime, setResumeTime] = useState(0);
-  // const [controlsTimer, setControlsTimer] = useState(null); // Replaced with useRef
   const controlsTimerRef = useRef(null); // Use ref for timer ID
   const [webViewConfig, setWebViewConfig] = useState(null);
   const [retryAttempts, setRetryAttempts] = useState(0);
@@ -79,9 +76,6 @@ const VideoPlayerScreen = ({ route }) => {
   const [autoPlayEnabled, setAutoPlayEnabled] = useState(false);
   const [showNextEpisodeButton, setShowNextEpisodeButton] = useState(false);
   const [isFindingNextEpisode, setIsFindingNextEpisode] = useState(false); // Prevent multiple fetches
-  // Removed autoPlayCountdownActive state
-  // --- End New Auto-Play States ---
-
   // --- End New Auto-Play States ---
 
   // --- Subtitle States ---
@@ -114,64 +108,41 @@ const VideoPlayerScreen = ({ route }) => {
         currentOrientation !== ScreenOrientation.Orientation.LANDSCAPE_LEFT &&
         currentOrientation !== ScreenOrientation.Orientation.LANDSCAPE_RIGHT
       ) {
-        console.log(`[Orientation Debug] Episodes Modal: Detected non-landscape orientation (${currentOrientation}), attempting to re-lock to LANDSCAPE.`);
         try {
           await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
         } catch (e) {
-          console.error("[Orientation Debug] Episodes Modal: Failed to re-lock to LANDSCAPE on orientation change:", e);
+          console.error("Episodes Modal: Failed to re-lock to LANDSCAPE on orientation change:", e);
         }
       }
     };
 
     if (showEpisodesModal) {
-      // Lock to landscape when modal becomes visible
       ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE)
-        .then(() => console.log("[Orientation Debug] Episodes Modal: Initial lock to LANDSCAPE on becoming visible."))
-        .catch(e => console.error("[Orientation Debug] Episodes Modal: Failed initial lock to LANDSCAPE:", e));
+        .catch(e => console.error("Episodes Modal: Failed initial lock to LANDSCAPE:", e));
 
-      // Add listener
       if (!episodesModalOrientationListenerRef.current) {
         episodesModalOrientationListenerRef.current = ScreenOrientation.addOrientationChangeListener(handleOrientationChange);
-        console.log("[Orientation Debug] Episodes Modal: Orientation change listener added.");
-        
-        // AGGRESSIVE: Try to lock again immediately after listener is added,
-        // as the modal might be starting its presentation sequence now.
         ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE)
-          .then(() => console.log("[Orientation Debug] Episodes Modal: Aggressive re-lock post-listener add."))
-          .catch(e => console.error("[Orientation Debug] Episodes Modal: Failed aggressive re-lock post-listener add:", e));
+          .catch(e => console.error("Episodes Modal: Failed aggressive re-lock post-listener add:", e));
       }
     } else {
-      // Remove listener when modal is hidden
       if (episodesModalOrientationListenerRef.current) {
         ScreenOrientation.removeOrientationChangeListener(episodesModalOrientationListenerRef.current);
         episodesModalOrientationListenerRef.current = null;
-        console.log("[Orientation Debug] Episodes Modal: Orientation change listener removed.");
-        // Optionally, re-lock to landscape one last time after modal is fully gone if needed,
-        // but the main player screen should already enforce this.
-        // ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE).catch(()=>{});
       }
     }
 
     return () => {
-      // Cleanup: Remove listener if component unmounts while modal is shown
       if (episodesModalOrientationListenerRef.current) {
         ScreenOrientation.removeOrientationChangeListener(episodesModalOrientationListenerRef.current);
         episodesModalOrientationListenerRef.current = null;
-        console.log("[Orientation Debug] Episodes Modal: Orientation change listener removed on unmount.");
       }
     };
-  }, [showEpisodesModal]); // Re-run this effect when showEpisodesModal changes
+  }, [showEpisodesModal]);
   
-  // --- Logging Wrappers for State Setters --- (Keep if used elsewhere, remove if only for countdown)
-  // NOTE: Reviewing if logSetShowControls is still needed without countdown logic. Keeping for now.
   const logSetShowControls = useCallback((value) => {
-    //console.log(`[Debug Loop] Setting showControls = ${typeof value === 'function' ? 'function' : value}`);
-    setShowControls(value); // Corrected: Use the actual state setter
-  }, [setShowControls]); // Corrected: Dependency should be the actual setter
-
-  // Removed logSetAutoPlayCountdownActive wrapper
-
-  // --- End Logging Wrappers ---
+    setShowControls(value);
+  }, [setShowControls]);
 
   const getStreamHeaders = () => {
     // ... (keep existing headers function)
@@ -215,9 +186,6 @@ const VideoPlayerScreen = ({ route }) => {
       controlsTimerRef.current = null;
     }
 
-    // Read current state values directly inside the callback
-    // Removed check for autoPlayCountdownActive
-
     // Set new timer using ref
     controlsTimerRef.current = setTimeout(() => {
       setShowControls(false);
@@ -256,10 +224,8 @@ const VideoPlayerScreen = ({ route }) => {
   }, [showControls, opacityAnim, startControlsTimer]);
 
   const toggleControls = () => {
-    // Removed check for autoPlayCountdownActive and cancelAutoPlay call
     setShowControls(currentShowControls => !currentShowControls);
   };
-  // --- End Animation and Controls Timer ---
 
 
   // --- Brightness Handling ---
@@ -286,15 +252,10 @@ const VideoPlayerScreen = ({ route }) => {
         if (hasBrightnessPermission) {
           try {
             const currentBrightness = await Brightness.getSystemBrightnessAsync();
-            console.log('[Brightness] System brightness on resume:', currentBrightness);
             setBrightnessLevel(currentBrightness); // Update our UI
           } catch (e) {
-            console.error('[Brightness] Error fetching brightness on resume:', e);
+            console.error('Error fetching brightness on resume:', e);
           }
-        } else {
-          console.log('[Brightness] No permission to get brightness on resume (permission state was false).');
-          // Optionally, try to request permission again or inform the user.
-          // For now, just logging.
         }
       }
     };
@@ -311,66 +272,41 @@ const VideoPlayerScreen = ({ route }) => {
     setBrightnessLevel(value);
     await Brightness.setSystemBrightnessAsync(value);
     setShowControls(true); // Show controls and reset timer on interaction
-    // Removed cancelAutoPlay call
   };
-  // --- End Brightness Handling ---
 
 
-  // --- Auto-Play Logic ---
-  // Removed cancelAutoPlay function
-  // Removed startAutoPlayCountdown function
-
-  const findNextEpisode = useCallback(async () => { // Make async
+  const findNextEpisode = useCallback(async () => {
     if (mediaType !== 'tv' || isFindingNextEpisode || showNextEpisodeButton) {
-      // console.log("Skipping findNextEpisode:", { mediaType, isFindingNextEpisode, showNextEpisodeButton });
-      return; // Only for TV shows, prevent multiple fetches, skip if already found
+      return;
     }
-
-    // console.log(`Finding next episode for S${season} E${episode}`);
     setIsFindingNextEpisode(true);
-
     try {
-      const showData = await fetchTVShowDetails(mediaId); // Use the correct function name
+      const showData = await fetchTVShowDetails(mediaId);
       if (!showData || !showData.seasons) {
-        // console.log("No show data or seasons found.");
         setIsFindingNextEpisode(false);
         return;
       }
-
-      // Filter out seasons with season_number 0 (Specials) unless it's the ONLY season
       const validSeasons = showData.seasons.filter(s => s.season_number > 0 || showData.seasons.length === 1);
       if (validSeasons.length === 0) {
-        // console.log("No valid seasons (non-specials) found.");
         setIsFindingNextEpisode(false);
         return;
       }
-
-
       const currentSeasonData = validSeasons.find(s => s.season_number === season);
       const currentSeasonIndex = validSeasons.findIndex(s => s.season_number === season);
-
       let nextEp = null;
       let nextSe = null;
-
       if (currentSeasonData && episode < currentSeasonData.episode_count) {
-        // Next episode in the same season
         nextSe = season;
         nextEp = episode + 1;
-        // console.log(`Found next episode in same season: S${nextSe} E${nextEp}`);
       } else if (currentSeasonIndex !== -1 && currentSeasonIndex < validSeasons.length - 1) {
-        // First episode of the next valid season
         const nextSeasonData = validSeasons[currentSeasonIndex + 1];
-        // Ensure next season has episodes and a valid season number
         if (nextSeasonData && nextSeasonData.episode_count > 0 && nextSeasonData.season_number > 0) {
           nextSe = nextSeasonData.season_number;
           nextEp = 1;
-          // console.log(`Found next episode in next season: S${nextSe} E${nextEp}`);
         }
       }
-
       if (nextSe !== null && nextEp !== null) {
-        // Fetch details for the specific next episode to get its title
-        let episodeName = `Episode ${nextEp}`; // Default placeholder
+        let episodeName = `Episode ${nextEp}`;
         try {
           const nextSeasonFullDetails = await fetchSeasonDetails(mediaId, nextSe);
           const nextEpisodeData = nextSeasonFullDetails?.episodes?.find(e => e.episode_number === nextEp);
@@ -379,181 +315,135 @@ const VideoPlayerScreen = ({ route }) => {
           }
         } catch (fetchErr) {
           console.warn(`Could not fetch details for S${nextSe} E${nextEp} to get title:`, fetchErr);
-          // Keep the placeholder title if fetch fails
         }
-
         const nextDetails = {
           mediaId: mediaId,
           mediaType: 'tv',
           season: nextSe,
           episode: nextEp,
-          title: title, // Show title remains the same
-          episodeTitle: episodeName, // Use fetched name or placeholder
-          poster_path: poster_path, // Use current show poster
+          title: title,
+          episodeTitle: episodeName,
+          poster_path: poster_path,
         };
-        nextEpisodeDetailsRef.current = nextDetails; // Store in ref
-        setShowNextEpisodeButton(true); // Show button now
-        // console.log("Next episode button should be shown now.");
+        nextEpisodeDetailsRef.current = nextDetails;
+        setShowNextEpisodeButton(true);
       } else {
-        // console.log("Last episode of the series reached.");
-        nextEpisodeDetailsRef.current = null; // Explicitly set to null for "go home" logic
-        setShowNextEpisodeButton(true); // Show button now (for "go home")
+        nextEpisodeDetailsRef.current = null;
+        setShowNextEpisodeButton(true);
       }
-
     } catch (err) {
       console.error("Error finding next episode:", err);
     } finally {
       setIsFindingNextEpisode(false);
     }
-  }, [mediaId, mediaType, season, episode, title, poster_path, isFindingNextEpisode, showNextEpisodeButton, fetchSeasonDetails]); // Added fetchSeasonDetails dependency
+  }, [mediaId, mediaType, season, episode, title, poster_path, isFindingNextEpisode, showNextEpisodeButton, fetchSeasonDetails]);
 
   const playNextEpisode = useCallback(() => {
-    // Removed cancelAutoPlay call
-
     const nextDetails = nextEpisodeDetailsRef.current;
-
     if (nextDetails) {
-      // console.log("Navigating to next episode:", nextDetails);
-      // Reset state before navigating to ensure clean player on next screen
-      setIsUnmounting(true); // Prevent further actions on this screen
+      setIsUnmounting(true);
       if (player) player.pause();
-      // ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP) // REMOVED: Don't force portrait here
-      //   .catch(() => { }) // Ignore errors
-      //   .finally(() => {
-      //     navigation.replace('VideoPlayer', nextDetails);
-      //   });
-      // Navigate directly after pausing
       navigation.replace('VideoPlayer', nextDetails);
     } else {
-      // Last episode - go back home or to details
-      // console.log("Navigating back (last episode).");
-      handleGoBack(true); // Pass flag to indicate it's due to end of series
+      handleGoBack(true);
     }
-  }, [navigation, player, handleGoBack]); // Adjusted dependencies
+  }, [navigation, player, handleGoBack]);
 
-  // Trigger findNextEpisode when video nears end
   useEffect(() => {
     if (duration > 0 && position > 0 && (duration - position) < VIDEO_END_THRESHOLD_SECONDS) {
       if (!isFindingNextEpisode && !showNextEpisodeButton) {
         findNextEpisode();
       }
     }
-  }, [position, duration, findNextEpisode, isFindingNextEpisode, showNextEpisodeButton]); // Added dependencies back
-
-  // Removed effect that triggered auto-play countdown
-  // --- End Auto-Play Logic ---
+  }, [position, duration, findNextEpisode, isFindingNextEpisode, showNextEpisodeButton]);
 
 
   // --- Subtitle Logic ---
   const findSubtitles = useCallback(async () => {
     if (!mediaId || loadingSubtitles) return;
     setLoadingSubtitles(true);
-    setAvailableLanguages({}); // Clear previous results
+    setAvailableLanguages({});
     try {
-      console.log(`Searching subtitles for TMDB ID: ${mediaId}, Type: ${mediaType}, S: ${season}, E: ${episode}`);
       const results = await searchSubtitles(
         mediaId,
-        'en', // Defaulting to English for now, could be made configurable
+        'en',
         mediaType === 'tv' ? season : undefined,
         mediaType === 'tv' ? episode : undefined
       );
-      console.log(`Found ${results.length} subtitles.`);
-
-      // Group by language and find the best one (e.g., highest download count)
       const languages = {};
       results.forEach(sub => {
         const attr = sub.attributes;
         if (!attr || !attr.language || !attr.files || attr.files.length === 0) {
-          return; // Skip invalid entries
+          return;
         }
-
         const lang = attr.language;
-        const fileInfo = attr.files[0]; // Assuming the first file is the relevant one
+        const fileInfo = attr.files[0];
         const currentSub = {
           language: lang,
           file_id: fileInfo.file_id,
           release_name: attr.release,
-          download_count: attr.download_count || 0, // Use download_count for sorting, default to 0
+          download_count: attr.download_count || 0,
           fps: attr.fps || -1
-          // Add rating if available: rating: attr.ratings || 0,
         };
-
         if (!languages[lang] || currentSub.download_count > languages[lang].download_count) {
-          // If this language isn't stored yet, or this sub has more downloads, store it
           languages[lang] = currentSub;
         }
       });
-
-      console.log(`Processed languages: ${Object.keys(languages).join(', ')}`);
       setAvailableLanguages(languages);
     } catch (err) {
       console.error("Error searching subtitles:", err);
-      // Optionally show an error to the user
     } finally {
       setLoadingSubtitles(false);
     }
   }, [mediaId, mediaType, season, episode, loadingSubtitles]);
 
   const selectSubtitle = useCallback(async (langCode) => {
-    setShowSubtitleSelection(false); // Close modal
+    setShowSubtitleSelection(false);
     if (!langCode) {
-      // User selected "None"
       setParsedSubtitles([]);
       setSelectedLanguage(null);
       setCurrentSubtitleText('');
       setSubtitlesEnabled(false);
       return;
     }
-
     if (langCode === selectedLanguage) {
-      // Re-selected the same language, just ensure it's enabled
       setSubtitlesEnabled(true);
       return;
     }
-
-    console.log(`[Subtitle Select] Language selected: ${langCode}`); // Log selected language
     const bestSubtitleInfo = availableLanguages[langCode];
-    console.log(`[Subtitle Select] Best subtitle info found:`, bestSubtitleInfo); // Log the retrieved info
-
     if (!bestSubtitleInfo || !bestSubtitleInfo.file_id) {
-      console.error(`[Subtitle Select] Error: No valid subtitle file_id found for language: ${langCode}`);
-      setLoadingSubtitles(false); // Ensure loading stops if we return early
+      console.error(`Error: No valid subtitle file_id found for language: ${langCode}`);
+      setLoadingSubtitles(false);
       return;
     }
-
     setLoadingSubtitles(true);
-    setSelectedLanguage(langCode); // Store the selected language code
-    setParsedSubtitles([]); // Clear previous
+    setSelectedLanguage(langCode);
+    setParsedSubtitles([]);
     setCurrentSubtitleText('');
-
     try {
-      console.log(`Downloading best subtitle for ${langCode}, File ID: ${bestSubtitleInfo.file_id}`);
       const srtContent = await downloadSubtitle(bestSubtitleInfo.file_id);
       if (srtContent) {
-        console.log("Subtitle content downloaded, parsing...");
         const parsed = parseSrt(srtContent);
-        // Convert start/end times from HH:MM:SS,ms to seconds
         const parsedWithSeconds = parsed.map(line => ({
           ...line,
           startSeconds: timeToSeconds(line.start),
           endSeconds: timeToSeconds(line.end),
         }));
         setParsedSubtitles(parsedWithSeconds);
-        setSubtitlesEnabled(true); // Enable subtitles when successfully loaded
-        console.log(`Parsed ${parsedWithSeconds.length} subtitle lines.`);
+        setSubtitlesEnabled(true);
       } else {
         console.warn("Failed to download subtitle content.");
-        setSelectedLanguage(null); // Reset selection on failure
+        setSelectedLanguage(null);
         setSubtitlesEnabled(false);
       }
     } catch (err) {
-      console.error("[Subtitle Select] Error during download or parsing:", err); // Add identifier to error log
-      setSelectedLanguage(null); // Reset selection on failure
+      console.error("Error during subtitle download or parsing:", err);
+      setSelectedLanguage(null);
       setSubtitlesEnabled(false);
     } finally {
       setLoadingSubtitles(false);
     }
-  }, [selectedLanguage, availableLanguages]); // Updated dependencies
+  }, [selectedLanguage, availableLanguages]);
 
   // Helper to convert SRT time format (00:00:00,000) to seconds
   const timeToSeconds = (timeInput) => {
@@ -562,9 +452,7 @@ const VideoPlayerScreen = ({ route }) => {
       return timeInput;
     }
 
-    // Check if input is a valid string
     if (typeof timeInput !== 'string' || !timeInput) {
-      console.warn(`[timeToSeconds] Received invalid non-string/non-numeric input: ${timeInput}`);
       return 0;
     }
 
@@ -584,8 +472,8 @@ const VideoPlayerScreen = ({ route }) => {
       }
       return hours * 3600 + minutes * 60 + seconds + milliseconds / 1000;
     } catch (e) {
-      console.error(`[timeToSeconds] Error parsing time string "${timeInput}":`, e);
-      return 0; // Return 0 on parsing error
+      console.error(`Error parsing time string "${timeInput}":`, e);
+      return 0;
     }
   };
 
@@ -626,38 +514,26 @@ const VideoPlayerScreen = ({ route }) => {
 
   // --- Episodes Viewer Modal Logic ---
   const toggleEpisodesModal = async () => {
-    if (!showEpisodesModal) { // If modal is currently hidden, we are preparing to OPEN it
+    if (!showEpisodesModal) {
       try {
-        console.log("[Orientation Debug] Attempting to lock to LANDSCAPE before opening episodes modal.");
         await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
-        console.log("[Orientation Debug] Successfully locked to LANDSCAPE.");
-
-        // Introduce a short delay to allow the orientation change to fully propagate
-        // before the modal attempts to render.
-        await new Promise(resolve => setTimeout(resolve, 100)); // 100ms delay
-        console.log("[Orientation Debug] Delay completed after landscape lock.");
-
+        await new Promise(resolve => setTimeout(resolve, 100));
       } catch (e) {
-        console.error("[Orientation Debug] Failed to lock orientation or during delay before opening episodes modal:", e);
+        console.error("Failed to lock orientation or during delay before opening episodes modal:", e);
       }
-      
-      // Start fetching data if it's a TV show (can happen while modal is becoming visible)
       if (mediaType === 'tv') {
         fetchAllSeasonsAndEpisodes();
       }
-      setShowEpisodesModal(true); // Now, set the modal to visible
-    } else { // If modal is currently visible, we are preparing to CLOSE it
+      setShowEpisodesModal(true);
+    } else {
       setShowEpisodesModal(false);
       try {
-        // Re-lock to ensure it stays landscape after modal closes via the toggle button.
-        // onRequestClose handles other close scenarios (hardware back button, modal's own close button).
         await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
-        console.log("[Orientation Debug] Re-locked to LANDSCAPE on modal toggle-close (button).");
       } catch (e) {
-        console.error("[Orientation Debug] Failed to re-lock to LANDSCAPE on modal toggle-close (button):", e);
+        console.error("Failed to re-lock to LANDSCAPE on modal toggle-close (button):", e);
       }
     }
-    setShowControls(true); // Keep controls visible when modal is toggled
+    setShowControls(true);
   };
 
   const fetchAllSeasonsAndEpisodes = async () => {
@@ -675,8 +551,7 @@ const VideoPlayerScreen = ({ route }) => {
             // Fetch watch progress for each episode in this season
             const episodesWithProgress = await Promise.all(
               (seasonDetail?.episodes || []).map(async (ep) => {
-                const progressKey = `tv-${mediaId}-s${s.season_number}-e${ep.episode_number}`;
-                const progress = await getWatchProgress(progressKey); // Use specific key for episode progress
+                const progress = await getEpisodeWatchProgress(mediaId, s.season_number, ep.episode_number);
                 return { ...ep, watchProgress: progress };
               })
             );
@@ -712,9 +587,7 @@ const VideoPlayerScreen = ({ route }) => {
       setIsLoadingModalEpisodes(true);
       const episodesWithProgress = await Promise.all(
         (seasonData.episodes || []).map(async (ep) => {
-          // Use the specific contentId for each episode to get its progress
-          const episodeSpecificId = `tv-${mediaId}-s${selectedSeasonNumber}-e${ep.episode_number}`;
-          const progress = await getWatchProgress(episodeSpecificId);
+          const progress = await getEpisodeWatchProgress(mediaId, selectedSeasonNumber, ep.episode_number);
           return { ...ep, watchProgress: progress };
         })
       );
@@ -743,61 +616,38 @@ const VideoPlayerScreen = ({ route }) => {
       const lastPos = lastPositionRef.current;
       const lastTime = lastPositionTimeRef.current;
 
-      // Check if position hasn't changed much for ~2 seconds
       if (Math.abs(currentEventTime - lastPos) < 0.5 && now - lastTime > 2000) {
-        console.log("[AutoPlay Debug] Assuming video finished based on position near end.");
-        manualFinishTriggeredRef.current = true; // Prevent re-triggering
-
-        // Manually trigger the finish logic (similar to statusChange handler)
+        manualFinishTriggeredRef.current = true;
         if (showNextEpisodeButton && autoPlayEnabled) {
-          console.log("[AutoPlay Debug] Manually calling playNextEpisode()");
           playNextEpisode();
         } else if (!showNextEpisodeButton && autoPlayEnabled && mediaType === 'tv') {
-          console.log("[AutoPlay Debug] Manual finish: Button not shown yet. Finding next episode...");
           findNextEpisode().then(() => {
             setTimeout(() => {
               if (nextEpisodeDetailsRef.current) {
-                console.log("[AutoPlay Debug] Manual finish: Found next episode. Calling playNextEpisode()");
                 playNextEpisode();
               } else {
-                console.log("[AutoPlay Debug] Manual finish: No next episode found. Calling handleGoBack()");
                 handleGoBack(true);
               }
             }, 100);
           });
         } else if (autoPlayEnabled && mediaType === 'movie') {
-          console.log("[AutoPlay Debug] Manual finish: Movie finished. Calling handleGoBack()");
           handleGoBack(true);
-        } else {
-          console.log("[AutoPlay Debug] Manual finish: Conditions not met for auto-play.");
-          // Optionally call handleGoBack(true) here if desired even if auto-play is off
         }
       }
     }
-    // Update last known position and time for manual detection
     lastPositionRef.current = currentEventTime;
     lastPositionTimeRef.current = now;
-
-    // Reset manual trigger flag if user seeks away from the end
-    if (duration > 0 && currentEventTime < duration - 5) { // If seeked back more than 5 seconds
+    if (duration > 0 && currentEventTime < duration - 5) {
       if (manualFinishTriggeredRef.current) {
-        console.log("[AutoPlay Debug] User seeked away from end, resetting manual finish trigger.");
         manualFinishTriggeredRef.current = false;
       }
     }
-    // --- End Manual End Detection ---
 
-
-    // Throttle saving progress
     if (currentEventTime > 0 && now - lastSaveTimeRef.current > 5000) {
       saveProgress(currentEventTime);
       lastSaveTimeRef.current = now;
     }
-
-    // Update subtitle based on new position
     updateCurrentSubtitle(currentEventTime);
-
-    // Removed check for autoPlayCountdownActive
   };
 
   const handleDurationChange = (dur) => {
@@ -834,10 +684,7 @@ const VideoPlayerScreen = ({ route }) => {
   useEventListener(player, 'statusChange', (event) => {
     const status = event?.status ?? event; // Get status first
 
-    if (isUnmounting) {
-      // console.log("[AutoPlay Debug] statusChange ignored: isUnmounting=true"); // Kept for auto-play debugging if needed
-      return;
-    }
+    if (isUnmounting) return;
 
 
     if (typeof status === 'object' && status !== null) {
@@ -875,30 +722,21 @@ const VideoPlayerScreen = ({ route }) => {
         }
       } else if (status === 'loading' && !loading && isPlaying) {
         setLoading(true);
-      } else if (status === 'finished') { // Handle 'finished' string status too
-        // console.log("Video finished playing (status === 'finished')"); // Covered by earlier log
-        // Same logic as status.isFinished
+      } else if (status === 'finished') {
         if (showNextEpisodeButton && autoPlayEnabled) {
-          console.log("[AutoPlay Debug] Calling playNextEpisode() [Primary Path - String Status]"); // Added log
           playNextEpisode();
         } else if (!showNextEpisodeButton && autoPlayEnabled && mediaType === 'tv') {
-          console.log("[AutoPlay Debug] Video finished but button not shown yet. Finding next episode... [Edge Case - String Status]"); // Added log
           findNextEpisode().then(() => {
             setTimeout(() => {
               if (nextEpisodeDetailsRef.current) {
-                console.log("[AutoPlay Debug] Found next episode details after finish. Calling playNextEpisode() [Edge Case Path - String Status]"); // Added log
                 playNextEpisode();
               } else {
-                console.log("[AutoPlay Debug] No next episode found after finish. Calling handleGoBack() [Edge Case Path - String Status]"); // Added log
                 handleGoBack(true);
               }
             }, 100);
           });
         } else if (!showNextEpisodeButton && autoPlayEnabled && mediaType === 'movie') {
-          console.log("[AutoPlay Debug] Movie finished. Calling handleGoBack() [Movie Path - String Status]"); // Added log
           handleGoBack(true);
-        } else if (!isVideoFinished) { // Added check to prevent logging twice
-          console.log("[AutoPlay Debug] Video finished (string status), but autoPlay conditions not met."); // Added log
         }
       }
     }
@@ -921,7 +759,6 @@ const VideoPlayerScreen = ({ route }) => {
           }
         }, 1000);
       }
-      // Removed check for autoPlayCountdownActive on pause
     }
   });
 
@@ -967,8 +804,6 @@ const VideoPlayerScreen = ({ route }) => {
     const setOrientationAndHideUI = async () => {
       try {
         await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
-        // await SystemUI.setSystemBarsBehaviorAsync('inset-swipe'); // Might cause issues, test carefully
-        // await SystemUI.hideSystemBarsAsync(); // Hide status/navigation bars
       } catch (e) {
         console.error("Failed to set orientation or hide UI:", e);
       }
@@ -999,11 +834,9 @@ const VideoPlayerScreen = ({ route }) => {
           if (!isMounted || streamExtractionComplete || videoUrl) return;
           const processedUrl = Platform.OS === 'ios' ? streamUrl.replace('http://', 'https://') : streamUrl;
           saveStreamUrl(contentId, processedUrl);
-          // The duplicate declaration was here and has been removed.
-          // The following lines correctly use the 'processedUrl' declared above.
           setVideoUrl(processedUrl);
           setStreamExtractionComplete(true);
-          setManualWebViewVisible(false); // Hide WebView once stream is found
+          setManualWebViewVisible(false);
           setCaptchaUrl(null);
         },
         (err) => {
@@ -1012,17 +845,16 @@ const VideoPlayerScreen = ({ route }) => {
           setStreamExtractionComplete(true);
           setLoading(false);
           setIsInitialLoading(false);
-          setManualWebViewVisible(false); // Hide on error too
+          setManualWebViewVisible(false);
           setCaptchaUrl(null);
         },
         (urlForCaptcha) => { // onManualInterventionRequired
           if (!isMounted) return;
-          // console.log("[VideoPlayerScreen] Manual intervention required for CAPTCHA on URL:", urlForCaptcha); // Removed debug log
           setCaptchaUrl(urlForCaptcha);
           setManualWebViewVisible(true);
         }
       );
-      setWebViewConfig(config); // Store the original config
+      setWebViewConfig(config);
     };
 
     const initializePlayer = async () => {
@@ -1060,22 +892,13 @@ const VideoPlayerScreen = ({ route }) => {
     return () => {
       isMounted = false;
       setIsUnmounting(true);
-      // Removed cancelAutoPlay call
-
       try {
         saveProgress(position);
-
         if (player && typeof player.pause === 'function') {
           try {
             player.pause();
           } catch (pauseError) { }
         }
-
-        // ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP) // REMOVED: Don't force portrait on unmount
-        //   .catch(e => { });
-
-        // SystemUI.showSystemBarsAsync().catch(e => {}); // Show system bars again
-
         backHandler.remove();
 
         // Clear timer ref on unmount
@@ -1096,13 +919,9 @@ const VideoPlayerScreen = ({ route }) => {
     // Only save if not unmounting and time/duration are valid
     if (isUnmounting || !currentTime || !duration || duration <= 0) return;
 
-    // Don't save if we are very close to the end (let auto-play handle it)
     if ((duration - currentTime) < VIDEO_END_THRESHOLD_SECONDS) {
-      // console.log("Near end, skipping saveProgress.");
       return;
     }
-
-    // console.log(`Attempting to save progress: ${currentTime} / ${duration}`);
     try {
       const data = {
         title: title,
@@ -1129,12 +948,9 @@ const VideoPlayerScreen = ({ route }) => {
       if (player) {
         if (isPlaying) {
           player.pause();
-          // Removed cancelAutoPlay call
         } else {
           player.play();
-          // Don't restart auto-play on resume, let it trigger naturally near the end
         }
-        // setIsPlaying(!isPlaying); // State updated by listener
       }
       setShowControls(true);
     } catch (error) {
@@ -1146,7 +962,6 @@ const VideoPlayerScreen = ({ route }) => {
     try {
       if (player) {
         player.seekBy(-10);
-        // Removed cancelAutoPlay call
       }
       setShowControls(true);
     } catch (error) {
@@ -1158,7 +973,6 @@ const VideoPlayerScreen = ({ route }) => {
     try {
       if (player) {
         player.seekBy(10);
-        // Removed cancelAutoPlay call
       }
       setShowControls(true);
     } catch (error) {
@@ -1171,21 +985,15 @@ const VideoPlayerScreen = ({ route }) => {
   const handleGoBack = useCallback((isEndOfSeries = false) => {
     if (isUnmounting) return;
     setIsUnmounting(true);
-    // Removed cancelAutoPlay call
-
     try {
-      // Only save progress if not triggered by end of series naturally
       if (!isEndOfSeries) {
         saveProgress(position);
       }
-
       if (player) {
         player.pause();
       }
-
       ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP)
-        // .then(() => SystemUI.showSystemBarsAsync()) // Show UI elements
-        .catch(() => { }) // Ignore errors
+        .catch(() => { })
         .finally(() => {
           const navRef = navigationRef.current;
           if (!navRef) return;
@@ -1216,8 +1024,6 @@ const VideoPlayerScreen = ({ route }) => {
   }, [isUnmounting, player, position, navigationRef]); // Adjusted dependencies
 
   const handleReload = async () => {
-    // ... (keep existing reload logic) ...
-    // Removed cancelAutoPlay call
     setShowNextEpisodeButton(false);
     nextEpisodeDetailsRef.current = null;
     setIsFindingNextEpisode(false);
@@ -1241,7 +1047,6 @@ const VideoPlayerScreen = ({ route }) => {
 
   // --- Time Formatting ---
   const formatTime = (timeInSeconds) => {
-    // ... (keep existing time formatting) ...
     if (isNaN(timeInSeconds) || timeInSeconds < 0) return '0:00';
     const hours = Math.floor(timeInSeconds / 3600);
     const minutes = Math.floor((timeInSeconds % 3600) / 60);
@@ -1251,6 +1056,16 @@ const VideoPlayerScreen = ({ route }) => {
     return hours > 0
       ? `${hours}:${formattedMinutes}:${formattedSeconds}`
       : `${formattedMinutes}:${formattedSeconds}`;
+  };
+
+  const formatRuntime = (minutes) => {
+    if (!minutes || isNaN(minutes)) return '';
+    const hrs = Math.floor(minutes / 60);
+    const mins = minutes % 60;
+    if (hrs > 0) {
+      return `${hrs}h ${mins}m`;
+    }
+    return `${mins}m`;
   };
   // --- End Time Formatting ---
 
@@ -1271,7 +1086,6 @@ const VideoPlayerScreen = ({ route }) => {
     onStartShouldSetPanResponder: () => true,
     onMoveShouldSetPanResponder: () => true,
     onPanResponderGrant: (evt) => {
-      // Removed cancelAutoPlay call
       setIsSeeking(true);
       if (player && isPlaying) {
         player.pause();
@@ -1412,12 +1226,10 @@ const VideoPlayerScreen = ({ route }) => {
       visible={showSubtitleSelection}
       onRequestClose={async () => {
         setShowSubtitleSelection(false);
-        // Re-lock to landscape after modal closes
         try {
           await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
-          console.log("[Orientation Debug] Re-locked to LANDSCAPE after modal close.");
         } catch (e) {
-          console.error("Failed to re-lock orientation:", e);
+          console.error("Failed to re-lock orientation after subtitle modal close:", e);
         }
       }}
     >
@@ -1459,18 +1271,21 @@ const renderEpisodesModal = () => {
     const progress = episodeData.watchProgress;
     let progressPercent = 0;
     if (progress && progress.duration > 0 && progress.position > 0) {
-      progressPercent = (progress.position / progress.duration) * 100;
+      progressPercent = (progress.position / progress.duration); // Value between 0 and 1
     }
 
     const episodePoster = episodeData.still_path
       ? `https://image.tmdb.org/t/p/w300${episodeData.still_path}`
-      : null; // Fallback if no still_path
+      : null;
+
+    const isCurrentEpisode = season === episodeData.season_number && episode === episodeData.episode_number;
+    const runtimeString = formatRuntime(episodeData.runtime);
 
     return (
       <TouchableOpacity
-        style={styles.episodeItem}
+        style={[styles.episodeItemHorizontal, isCurrentEpisode && styles.currentEpisodeItemHorizontal]}
         onPress={() => {
-          if (season === episodeData.season_number && episode === episodeData.episode_number) {
+          if (isCurrentEpisode) {
             setShowEpisodesModal(false);
             return;
           }
@@ -1487,28 +1302,34 @@ const renderEpisodesModal = () => {
           });
         }}
       >
-        <View style={styles.episodeImageContainer}>
+        <View style={styles.episodeThumbnailContainerHorizontal}>
           {episodePoster ? (
-            <Image source={{ uri: episodePoster }} style={styles.episodeImage} />
+            <Image source={{ uri: episodePoster }} style={styles.episodeThumbnailHorizontal} />
           ) : (
-            <View style={[styles.episodeImage, styles.placeholderImage]}>
-              <Ionicons name="tv-outline" size={40} color="#555" />
+            <View style={[styles.episodeThumbnailHorizontal, styles.placeholderThumbnailHorizontal]}>
+              <Ionicons name="image-outline" size={40} color="#555" />
             </View>
           )}
-          {progressPercent > 0 && (
-            <View style={styles.episodeProgressOverlay}>
-              <View style={[styles.episodeProgressBar, { width: `${progressPercent}%` }]} />
+          {progressPercent > 0 && progressPercent < 1 && (
+            <View style={styles.episodeProgressOverlayHorizontal}>
+              <View style={[styles.episodeProgressBarHorizontal, { width: `${progressPercent * 100}%` }]} />
+            </View>
+          )}
+          {progressPercent >= 1 && (
+            <View style={styles.watchedOverlayHorizontal}>
+              <Ionicons name="checkmark-circle" size={30} color="rgba(255, 255, 255, 0.9)" />
             </View>
           )}
         </View>
-        <View style={styles.episodeInfo}>
-          <Text style={styles.episodeNumberText} numberOfLines={1}>
-            Episode {episodeData.episode_number}{episodeData.name ? `: ${episodeData.name}` : ''}
+        <View style={styles.episodeDetailsHorizontal}>
+          <Text style={styles.episodeTitleTextHorizontal} numberOfLines={2}>
+            {`E${episodeData.episode_number}: ${episodeData.name || `Episode ${episodeData.episode_number}`}`}
           </Text>
-          {progress && progress.duration > 0 && (
-             <Text style={styles.episodeDurationText}>
-              {formatTime(progress.duration - (progress.position || 0))} left
-            </Text>
+          <Text style={styles.episodeOverviewTextHorizontal} numberOfLines={3}>
+            {episodeData.overview || 'No overview available.'}
+          </Text>
+          {runtimeString && (
+            <Text style={styles.episodeRuntimeTextHorizontal}>{runtimeString}</Text>
           )}
         </View>
       </TouchableOpacity>
@@ -1520,22 +1341,19 @@ const renderEpisodesModal = () => {
       animationType="fade"
       transparent={true}
       visible={showEpisodesModal}
-      presentationStyle="overFullScreen" // Explicitly set presentation style
-      supportedOrientations={['landscape', 'landscape-left', 'landscape-right']} // Explicitly support only landscape
-      onShow={async () => { // Add onShow handler to re-affirm landscape lock
+      presentationStyle="overFullScreen"
+      supportedOrientations={['landscape', 'landscape-left', 'landscape-right']}
+      onShow={async () => {
         try {
-          console.log("[Orientation Debug] Episodes Modal onShow: Attempting to lock to LANDSCAPE.");
           await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
-          console.log("[Orientation Debug] Episodes Modal onShow: Successfully locked to LANDSCAPE.");
         } catch (e) {
-          console.error("[Orientation Debug] Episodes Modal onShow: Failed to lock orientation:", e);
+          console.error("Episodes Modal onShow: Failed to lock orientation:", e);
         }
       }}
       onRequestClose={() => {
         setShowEpisodesModal(false);
-        // Ensure re-locking to landscape when modal is closed by hardware back or swipe
         ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE)
-          .catch(e => console.error("Failed to re-lock orientation on modal close:", e));
+          .catch(e => console.error("Failed to re-lock orientation on episodes modal close:", e));
       }}
     >
       <View style={styles.episodesModalOverlay}>
@@ -1551,27 +1369,25 @@ const renderEpisodesModal = () => {
             <ActivityIndicator size="large" color="#E50914" style={{ flex: 1 }} />
           ) : (
             <>
-              {allSeasonsData.length > 1 && (
-                <View style={styles.seasonSelectorContainer}>
-                  <FlatList
-                    horizontal
-                    data={allSeasonsData.sort((a, b) => a.season_number - b.season_number)}
-                    renderItem={({ item: seasonItem }) => (
-                      <TouchableOpacity
-                        style={[
-                          styles.seasonTab,
-                          selectedSeasonForModal === seasonItem.season_number && styles.seasonTabSelected,
-                        ]}
-                        onPress={() => handleSelectSeasonForModal(seasonItem.season_number)}
-                      >
-                        <Text style={styles.seasonTabText}>
-                          {seasonItem.name || `Season ${seasonItem.season_number}`}
-                        </Text>
-                      </TouchableOpacity>
-                    )}
-                    keyExtractor={(item) => `season-${item.id || item.season_number}`}
-                    showsHorizontalScrollIndicator={false}
-                  />
+              {allSeasonsData.length > 0 && ( // Show picker only if there are seasons
+                <View style={styles.seasonPickerContainerStyle}>
+                  <Picker
+                    selectedValue={selectedSeasonForModal}
+                    style={styles.seasonPickerStyle}
+                    onValueChange={(itemValue) => handleSelectSeasonForModal(itemValue)}
+                    dropdownIconColor="white"
+                  >
+                    {allSeasonsData
+                      .sort((a, b) => a.season_number - b.season_number)
+                      .map((seasonItem) => (
+                        <Picker.Item
+                          key={`season-picker-${seasonItem.id || seasonItem.season_number}`}
+                          label={seasonItem.name || `Season ${seasonItem.season_number}`}
+                          value={seasonItem.season_number}
+                          color={Platform.OS === 'android' ? 'white' : undefined} // Picker.Item color prop is iOS only
+                        />
+                      ))}
+                  </Picker>
                 </View>
               )}
               {isLoadingModalEpisodes && episodesForModal.length === 0 ? (
@@ -1580,15 +1396,15 @@ const renderEpisodesModal = () => {
                   </View>
               ) : episodesForModal.length > 0 ? (
                 <FlatList
-                  data={episodesForModal.sort((a,b) => a.episode_number - b.episode_number)}
+                  horizontal // Changed to horizontal
+                  data={episodesForModal.sort((a, b) => a.episode_number - b.episode_number)}
                   renderItem={renderEpisodeItem}
-                  keyExtractor={(item) => `ep-${item.id || (item.season_number +'_'+ item.episode_number)}`}
-                  horizontal={true} // Make episode list scroll horizontally
-                  showsHorizontalScrollIndicator={false} // Hide scrollbar for Netflix-like feel
-                  contentContainerStyle={styles.episodesListContent}
-                  initialNumToRender={4} // Adjust for horizontal list
-                  maxToRenderPerBatch={6} // Adjust for horizontal list
-                  windowSize={8} // Adjust for horizontal list
+                  keyExtractor={(item) => `ep-${item.id || (item.season_number + '_' + item.episode_number)}`}
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.episodesListContentHorizontal}
+                  initialNumToRender={3}
+                  maxToRenderPerBatch={5}
+                  windowSize={7}
                 />
               ) : (
                 <View style={styles.centeredMessage}>
@@ -1610,15 +1426,11 @@ const renderEpisodesModal = () => {
     const nextDetails = nextEpisodeDetailsRef.current;
     const buttonText = nextDetails
       ? `Next: S${nextDetails.season} E${nextDetails.episode}`
-      : "Back to Home"; // Or "Back to Details"
-
-    // Removed progressWidth animation
+      : "Back to Home";
 
     return (
-      // Keep Animated.View for potential future animations, or change to View if none planned
       <Animated.View style={[styles.nextEpisodeContainer]}>
         <TouchableOpacity style={styles.nextEpisodeButton} onPress={playNextEpisode}>
-          {/* Removed autoPlayProgress View */}
           <Ionicons name={nextDetails ? "play-skip-forward" : "home"} size={20} color="white" style={styles.nextEpisodeIcon} />
           <Text style={styles.nextEpisodeText}>{buttonText}</Text>
         </TouchableOpacity>
@@ -1647,11 +1459,7 @@ const renderEpisodesModal = () => {
             // The original onMessage should then be triggered.
             onError={(syntheticEvent) => {
                 // If CAPTCHA view is active, an error here might mean CAPTCHA itself failed to load
-                // or user navigated to a broken page within the CAPTCHA flow.
-                // We might want to allow retry or provide a message.
                 if (manualWebViewVisible) {
-                    // console.error('[VideoPlayerScreen] Error in visible CAPTCHA WebView:', syntheticEvent.nativeEvent); // Removed debug log
-                    // Optionally, set an error or allow user to close/retry CAPTCHA
                 } else if (webViewConfig.onError) {
                     webViewConfig.onError(syntheticEvent);
                 }
@@ -1663,10 +1471,7 @@ const renderEpisodesModal = () => {
                 // but if it's visible, the user is handling it.
                 // The original onHttpError from streamExtractor is what triggers onManualInterventionRequired.
                 // If it happens *again* while visible, it's a bit of a loop.
-                // For now, let's assume if it's visible, the user is interacting.
-                // The primary goal is for the page to eventually load so onMessage can fire.
                 if (manualWebViewVisible) {
-                     // console.warn('[VideoPlayerScreen] HTTP Error in visible CAPTCHA WebView:', syntheticEvent.nativeEvent); // Removed debug log
                 } else if (webViewConfig.onHttpError) {
                     webViewConfig.onHttpError(syntheticEvent);
                 }
@@ -1772,15 +1577,6 @@ const renderEpisodesModal = () => {
       {/* Black Transparent Overlay */}
       <Animated.View style={[styles.overlayBackground, { opacity: opacityAnim }]} pointerEvents="none" />
 
-      {/* Overlay Touchable - REMOVED as tap is now handled by GestureDetector */}
-      {/*
-      <TouchableOpacity
-        style={styles.overlayTouchable}
-        onPress={toggleControls}
-        activeOpacity={1}
-      />
-      */}
-
       {/* Controls Wrapper (Fades out) */}
       <Animated.View style={[styles.controlsWrapper, { opacity: opacityAnim, pointerEvents: showControls ? 'box-none' : 'none' }]}>
         <>
@@ -1856,9 +1652,6 @@ const renderEpisodesModal = () => {
               );
             })()}
           </SafeAreaView>
-
-          {/* REMOVE Next Episode Button from here */}
-          {/* {renderNextEpisodeButton()} */}
         </>
       </Animated.View>
 
@@ -1942,19 +1735,8 @@ const renderEpisodesModal = () => {
     borderWidth: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    overflow: 'hidden', // Important for progress animation
+    overflow: 'hidden',
   },
-  // Removed autoPlayProgress style
-  /*
-  autoPlayProgress: { // Visual indicator for countdown
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(255, 255, 255, 0.3)', // Semi-transparent white
-    // Width is animated
-  },
-  */
   nextEpisodeIcon: {
     marginRight: 8,
   },
@@ -2070,15 +1852,16 @@ const renderEpisodesModal = () => {
   },
   episodesModalContent: {
     backgroundColor: '#141414',
-    width: '90%', // Take 90% of screen width
-    height: '90%', // Take 90% of screen height
-    borderRadius: 15, // Apply border radius to all corners
-    paddingTop: 10, // Keep some padding at the top
+    width: '95%', // Wider modal
+    height: '90%', // Taller modal
+    borderRadius: 8, // Slightly less rounded
+    // marginTop: 100, // Remove fixed margin top
+    paddingTop: 0, // Remove padding at the top, header will handle it
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 }, // Adjust shadow for centered modal
-    shadowOpacity: 0.6,
-    shadowRadius: 10,
-    elevation: 20,
+    shadowOffset: { width: 0, height: 5 }, // Adjust shadow for centered modal
+    shadowOpacity: 0.8,
+    shadowRadius: 15,
+    elevation: 30,
     overflow: 'hidden', // Ensure content respects border radius
   },
   episodesModalHeader: {
@@ -2086,99 +1869,115 @@ const renderEpisodesModal = () => {
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 20,
-    paddingBottom: 10,
+    paddingVertical: 15, // More padding for header
     borderBottomWidth: 1,
-    borderBottomColor: '#333',
+    borderBottomColor: '#282828', // Darker border
+    backgroundColor: '#141414', // Ensure header background is consistent
   },
   episodesModalTitle: {
     color: 'white',
-    fontSize: 20,
+    fontSize: 22, // Larger title
     fontWeight: 'bold',
   },
   episodesModalCloseButton: {
     padding: 5,
   },
-  seasonSelectorContainer: {
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#333',
+  seasonPickerContainerStyle: {
+    marginHorizontal: 20,
+    marginVertical: 10,
+    borderWidth: 1,
+    borderColor: '#555',
+    borderRadius: 5,
+    backgroundColor: '#333', // Background for the picker container itself
   },
-  seasonTab: {
-    paddingVertical: 8,
-    paddingHorizontal: 15,
-    borderRadius: 20,
-    backgroundColor: '#333',
-    marginRight: 10,
+  seasonPickerStyle: {
+    height: 50,
+    width: '100%',
+    color: 'white', // Text color for selected item and dropdown arrow on iOS
+    // For Android, Picker.Item color is used for items in dropdown
   },
-  seasonTabSelected: {
-    backgroundColor: '#E50914',
+  episodesListContentHorizontal: { // Style for horizontal episode list
+    paddingVertical: 15,
+    paddingLeft: 20, // Start padding for the first item
+    paddingRight: 10, // End padding for the last item if needed
   },
-  seasonTabText: {
-    color: 'white',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  episodesListContent: {
-    paddingHorizontal: 15, // Padding at the start and end of the horizontal list
-    paddingVertical: 15,   // Padding above and below the list
-    // The FlatList itself will be a child of episodesModalContent, which has flex:1 (implicitly via height: '90%')
-    // So, the FlatList needs to be able to expand.
-    // If episodesModalContent has a fixed height, FlatList might need flex: 1 to fill it.
-    // For now, let's assume the content height will be driven by its children (header, season selector, episode list)
-  },
-  episodeItem: {
-    flexDirection: 'column', // Image above text
-    backgroundColor: '#222',
+  episodeItemHorizontal: {
+    flexDirection: 'column',
+    backgroundColor: '#1C1C1C',
     borderRadius: 8,
-    marginRight: 12, // Space between horizontal items
+    marginRight: 15, // Space between horizontal items
+    padding: 10,
+    width: 180, // Width for each episode item card
+    height: 280, // Fixed height for consistency
+    justifyContent: 'flex-start', // Align content to the top
+  },
+  currentEpisodeItemHorizontal: {
+    borderColor: '#E50914',
+    borderWidth: 2,
+  },
+  episodeThumbnailContainerHorizontal: {
+    width: '100%', // Thumbnail takes full width of the card
+    height: 100, // Fixed height for thumbnail (160 * 9/16)
+    borderRadius: 5,
     overflow: 'hidden',
-    width: 178, // Approx 16:9 for 100px height image (177.77 -> 178)
-    // Height will be determined by image + text content
-  },
-  episodeImageContainer: {
-    width: '100%', // Full width of the card
-    height: 100,    // Fixed height for the image part
     backgroundColor: '#333',
-    // borderRadius: 0, // Card itself has borderRadius, image container doesn't need its own if it's top part
-    overflow: 'hidden', // Ensure image respects this container's bounds
-    position: 'relative', // For progress bar overlay
+    position: 'relative', // For progress bar
+    marginBottom: 8,
   },
-  episodeImage: {
+  episodeThumbnailHorizontal: {
     width: '100%',
     height: '100%',
   },
-  placeholderImage: {
+  placeholderThumbnailHorizontal: {
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: '#282828',
   },
-  episodeProgressOverlay: {
+  episodeProgressOverlayHorizontal: {
     position: 'absolute',
     bottom: 0,
     left: 0,
     right: 0,
     height: 5,
-    backgroundColor: 'rgba(0,0,0,0.4)',
+    backgroundColor: 'rgba(0,0,0,0.6)',
   },
-  episodeProgressBar: {
+  episodeProgressBarHorizontal: {
     height: '100%',
     backgroundColor: '#E50914',
   },
-  episodeInfo: {
-    padding: 8, // General padding for text content below the image
-    // No flex: 1 needed, height will be auto based on text content
-    // justifyContent: 'flex-start', // Default is fine
+  watchedOverlayHorizontal: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: 5, // Match thumbnail border radius
   },
-  episodeNumberText: {
+  episodeDetailsHorizontal: {
+    flex: 1, // Take remaining space below thumbnail
+    justifyContent: 'flex-start',
+    paddingTop: 5,
+  },
+  episodeTitleTextHorizontal: {
     color: 'white',
-    fontSize: 13, // Slightly smaller for card layout
-    fontWeight: '600',
-    marginBottom: 3, // Adjust spacing
+    fontSize: 14,
+    fontWeight: 'bold',
+    marginBottom: 4,
   },
-  episodeDurationText: {
+  episodeOverviewTextHorizontal: {
+    color: '#B0B0B0',
+    fontSize: 12,
+    lineHeight: 16,
+    marginBottom: 6,
+  },
+  episodeRuntimeTextHorizontal: {
     color: '#888',
-    fontSize: 11, // Slightly smaller for card layout
+    fontSize: 11,
+    marginTop: 'auto', // Push to the bottom of episodeDetailsHorizontal
+    paddingTop: 4,
   },
   centeredLoader: {
     flex: 1,

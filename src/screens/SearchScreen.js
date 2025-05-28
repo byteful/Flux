@@ -28,8 +28,6 @@ const SearchScreen = ({ navigation }) => {
   const [listVersion, setListVersion] = useState(0); // Added for FlatList refresh
   const opacity = useSharedValue(0);
 
-  // Removed Mount/Unmount useEffect and Render console.log
-
   const animatedStyle = useAnimatedStyle(() => {
     return {
       opacity: opacity.value,
@@ -41,16 +39,10 @@ const SearchScreen = ({ navigation }) => {
       opacity.value = 0;
       opacity.value = withTiming(1, { duration: 300 });
       loadSearchHistory();
-      // Removed redundant logic:
-      // if (!query.trim()) {
-      //   setShowHistory(true);
-      // }
-      // This is handled by the useEffect hook that depends on query.
       setListVersion(prevVersion => prevVersion + 1); // Increment listVersion
       return () => {
-        // opacity.value = 0; // Optional: Reset opacity on blur
       };
-    }, [opacity]) // Removed query from dependency array
+    }, [opacity])
   );
 
   // useEffect to handle showing/hiding history based on query changes
@@ -219,7 +211,6 @@ const SearchScreen = ({ navigation }) => {
             clearButtonMode="always"
             onClear={handleClearInput} // This will be triggered by the native clear button
           />
-          {/* Removed custom clear button to prevent overlap */}
         </View>
 
         {loading ? (
@@ -303,9 +294,7 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     paddingVertical: 12,
-    // paddingRight: 30, // No longer needed as custom icon is removed
   },
-  // clearIconContainer style is no longer needed
   centerContent: {
     flex: 1,
     justifyContent: 'center',

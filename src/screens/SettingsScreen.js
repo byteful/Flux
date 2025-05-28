@@ -15,15 +15,17 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import Animated, { useSharedValue, useAnimatedStyle, withTiming } from 'react-native-reanimated';
-import Constants from 'expo-constants'; // Import Constants
+import Constants from 'expo-constants';
 // Import storage functions, including clearSearchHistory
 import { clearStreamCache, saveAutoPlaySetting, getAutoPlaySetting, clearSearchHistory as clearAllSearchHistoryStorage } from '../utils/storage';
+import { getCheckForUpdatesSetting, setCheckForUpdatesSetting, checkForUpdates as performUpdateCheck } from '../utils/updateChecker';
 
 const THEME_KEY = 'app_theme';
 const SEARCH_HISTORY_KEY = 'searchHistory'; // Define key for consistency
 
 const SettingsScreen = () => {
   const [autoPlayNext, setAutoPlayNext] = useState(false); // Default to false, will be loaded
+  const [checkForUpdatesEnabled, setCheckForUpdatesEnabled] = useState(true); // Default to true
   const [loading, setLoading] = useState(true);
   const [watchHistory, setWatchHistory] = useState(0);
   const [streamCacheCount, setStreamCacheCount] = useState(0);
@@ -62,6 +64,10 @@ const SettingsScreen = () => {
         // Load autoplay setting using the new function
         const isAutoPlayEnabled = await getAutoPlaySetting();
         setAutoPlayNext(isAutoPlayEnabled);
+
+        // Load check for updates setting
+        const updatesEnabled = await getCheckForUpdatesSetting();
+        setCheckForUpdatesEnabled(updatesEnabled);
 
         // Get watch history count
         const watchDataString = await AsyncStorage.getItem('continueWatching');
@@ -248,6 +254,17 @@ const SettingsScreen = () => {
     );
   };
 
+  // Handle "Check for Updates" toggle
+  const handleCheckForUpdatesToggle = async (value) => {
+    setCheckForUpdatesEnabled(value); // Update state immediately
+    await setCheckForUpdatesSetting(value);
+    // Optionally, add an alert if saving fails, though setCheckForUpdatesSetting doesn't return status
+  };
+
+  // Handle manual "Check for Updates Now"
+  const handleManualUpdateCheck = async () => {
+    await performUpdateCheck(true); // true to always show alert with result
+  };
 
   useFocusEffect(
     useCallback(() => {
@@ -290,6 +307,25 @@ const SettingsScreen = () => {
                 thumbColor="#fff"
               />
             </View>
+          </View>
+
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Application</Text>
+            <View style={styles.setting}>
+              <View style={styles.settingInfo}>
+                <Ionicons name="cloud-download-outline" size={22} color="#888" style={styles.settingIcon} />
+                <Text style={styles.settingTitle}>Check for Updates on Startup</Text>
+              </View>
+              <Switch
+                value={checkForUpdatesEnabled}
+                onValueChange={handleCheckForUpdatesToggle}
+                trackColor={{ false: '#444', true: '#E50914' }}
+                thumbColor="#fff"
+              />
+            </View>
+            <TouchableOpacity style={styles.button} onPress={handleManualUpdateCheck}>
+              <Text style={styles.buttonText}>Check for Updates Now</Text>
+            </TouchableOpacity>
           </View>
 
           <View style={styles.section}>
