@@ -11,11 +11,13 @@ import { Platform } from 'react-native';
  * @param {number|null} episode - The episode number (for TV shows)
  * @param {Function} onStreamFound - Callback function when stream URL is found
  * @param {Function} onError - Callback function for errors
+ * @param {Function} onManualInterventionRequired - Callback if manual interaction (e.g. CAPTCHA) is needed
  * @returns {Object} - The WebView instance control object
  */
-export const extractM3U8Stream = (tmdbId, type, season, episode, onStreamFound, onError) => {
+export const extractM3U8Stream = (tmdbId, type, season, episode, onStreamFound, onError, onManualInterventionRequired) => {
     // Generate the embed URL using vidsrcApi
     const embedUrl = getStreamingUrl(tmdbId, type, season, episode);
+    console.log('[StreamExtractor] Embed URL:', embedUrl);
 
     // JavaScript to inject into the WebView to intercept and extract m3u8 links
     const injectedJavaScript = `
@@ -204,41 +206,62 @@ export const extractM3U8Stream = (tmdbId, type, season, episode, onStreamFound, 
 
     // Prepare the WebView configuration
     let done = false;
+    const headers = Platform.OS === 'ios' ? {
+        // iOS needs specific headers due to App Transport Security
+        // Let WebView use its default User-Agent for iPad
+        'Referer': 'https://vidsrc.su/',
+        'Origin': 'https://vidsrc.su'
+    } : {
+        'Referer': 'https://vidsrc.su/',
+        'Origin': 'https://vidsrc.su',
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    };
+    console.log('[StreamExtractor] Using headers:', headers);
+
     const webViewConfig = {
         source: {
             uri: embedUrl,
-            headers: Platform.OS === 'ios' ? {
-                // iOS needs specific headers due to App Transport Security
-                'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148'
-            } : {
-                'Referer': 'https://vidsrc.su/',
-                'Origin': 'https://vidsrc.su',
-                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            }
+            headers: headers
         },
         injectedJavaScript: injectedJavaScript,
         onMessage: (event) => {
             if (done) return;
             try {
                 const data = JSON.parse(event.nativeEvent.data);
+                console.log('[StreamExtractor] WebView Message:', data);
 
                 if (data.type === 'stream' && data.url) {
+                    console.log('[StreamExtractor] Stream found:', data.url);
                     onStreamFound(data.url);
                     done = true;
                 } else if (data.type === 'stream_candidate') {
+                    console.log('[StreamExtractor] Stream candidate:', data.url);
                 } else if (data.type === 'error') {
+                    console.error('[StreamExtractor] Error from WebView JS:', data.message);
                     onError(new Error(data.message));
                 }
             } catch (error) {
+                console.error('[StreamExtractor] Error parsing WebView message:', error);
                 onError(error);
             }
         },
         onError: (syntheticEvent) => {
             const { nativeEvent } = syntheticEvent;
-            onError(new Error(`WebView error: ${nativeEvent.description}`));
+            console.error('[StreamExtractor] WebView onError (loading error):', nativeEvent);
+            // Don't immediately call onError for HTTP errors, let onHttpError handle it for potential manual intervention
+            if (!nativeEvent.url || !nativeEvent.description?.includes("net::ERR_HTTP_RESPONSE_CODE_FAILURE")) {
+                 onError(new Error(`WebView loading error: ${nativeEvent.description}`));
+            }
         },
         onHttpError: (syntheticEvent) => {
             const { nativeEvent } = syntheticEvent;
+            // console.error('[StreamExtractor] WebView onHttpError:', nativeEvent); // Removed debug log
+            if (nativeEvent.statusCode === 403 && onManualInterventionRequired) {
+                // console.log('[StreamExtractor] HTTP 403 detected, calling onManualInterventionRequired.'); // Removed debug log
+                onManualInterventionRequired(embedUrl); // Pass URL for context
+            } else {
+                onError(new Error(`WebView HTTP error: ${nativeEvent.statusCode} on ${nativeEvent.url}`));
+            }
         }
     };
 

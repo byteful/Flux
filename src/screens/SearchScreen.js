@@ -38,25 +38,24 @@ const SearchScreen = ({ navigation }) => {
 
   useFocusEffect(
     useCallback(() => {
-      // console.log(`[SearchScreen] FocusEffect START. Query: ${query}, Results length: ${results.length}, ShowHistory: ${showHistory}`);
       opacity.value = 0;
       opacity.value = withTiming(1, { duration: 300 });
       loadSearchHistory();
-      if (!query.trim()) {
-        setShowHistory(true);
-      }
+      // Removed redundant logic:
+      // if (!query.trim()) {
+      //   setShowHistory(true);
+      // }
+      // This is handled by the useEffect hook that depends on query.
       setListVersion(prevVersion => prevVersion + 1); // Increment listVersion
       return () => {
         // opacity.value = 0; // Optional: Reset opacity on blur
-        // console.log(`[SearchScreen] FocusEffect CLEANUP. Query: ${query}`);
       };
-    }, [opacity, query])
+    }, [opacity]) // Removed query from dependency array
   );
 
   // useEffect to handle showing/hiding history based on query changes
   // This runs after the initial setup by useFocusEffect
   useEffect(() => {
-    // console.log(`[SearchScreen] QueryEffect. Query: ${query}, Results length: ${results.length}, Current ShowHistory: ${showHistory}, Will set showHistory: ${!query.trim()}`);
     if (!query.trim()) {
       setShowHistory(true);
       loadSearchHistory(); // Ensure history is fresh when input is empty

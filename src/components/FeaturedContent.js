@@ -69,7 +69,10 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.6,
     shadowRadius: 4,
     borderColor: 'rgb(42, 42, 42)',
-    borderWidth: 1
+    borderWidth: 1,
+    maxWidth: 700, // Added max width
+    alignSelf: 'center', // Center the card
+    width: '100%', // Ensure it still tries to fill available width up to maxWidth
   },
   backgroundImage: {
     width: '100%',

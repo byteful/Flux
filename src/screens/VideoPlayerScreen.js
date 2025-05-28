@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { View, StyleSheet, ActivityIndicator, BackHandler, Text, TouchableOpacity, Platform, PanResponder, Animated, Easing, Modal, FlatList, Dimensions, AppState } from 'react-native';
+import { View, StyleSheet, ActivityIndicator, BackHandler, Text, TouchableOpacity, Platform, PanResponder, Animated, Easing, Modal, FlatList, Dimensions, AppState, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import * as ScreenOrientation from 'expo-screen-orientation';
@@ -29,6 +29,7 @@ const VideoPlayerScreen = ({ route }) => {
   // Removed autoPlayProgressAnim
   // Removed autoPlayTimerRef
   const nextEpisodeDetailsRef = useRef(null); // Ref to store next episode details
+  const episodesModalOrientationListenerRef = useRef(null); // Ref for the modal's orientation listener
   const lastPositionRef = useRef(0); // Ref for manual end detection
   const lastPositionTimeRef = useRef(0); // Ref for manual end detection
   const manualFinishTriggeredRef = useRef(false); // Ref for manual end detection flag
@@ -71,6 +72,8 @@ const VideoPlayerScreen = ({ route }) => {
   const [hasBrightnessPermission, setHasBrightnessPermission] = useState(false);
   const [isSeeking, setIsSeeking] = useState(false);
   const [seekPreviewPosition, setSeekPreviewPosition] = useState(null);
+  const [manualWebViewVisible, setManualWebViewVisible] = useState(false); // For CAPTCHA
+  const [captchaUrl, setCaptchaUrl] = useState(null); // To store URL for visible WebView
 
   // --- New Auto-Play States ---
   const [autoPlayEnabled, setAutoPlayEnabled] = useState(false);
@@ -90,6 +93,74 @@ const VideoPlayerScreen = ({ route }) => {
   const [subtitlesEnabled, setSubtitlesEnabled] = useState(false); // Default to disabled
   const [loadingSubtitles, setLoadingSubtitles] = useState(false);
   // --- End Subtitle States ---
+
+  // --- Episodes Viewer Modal States ---
+  const [showEpisodesModal, setShowEpisodesModal] = useState(false);
+  const [allSeasonsData, setAllSeasonsData] = useState([]); // Stores [{ season_number, name, episode_count, episodes: [] }]
+  const [selectedSeasonForModal, setSelectedSeasonForModal] = useState(null); // Stores season_number
+  const [episodesForModal, setEpisodesForModal] = useState([]); // Stores episodes of the selectedSeasonForModal
+  const [isLoadingModalEpisodes, setIsLoadingModalEpisodes] = useState(false);
+  const [modalEpisodeProgress, setModalEpisodeProgress] = useState({}); // { 'sX_eY': { position, duration } }
+  // --- End Episodes Viewer Modal States ---
+
+  // Effect to manage screen orientation when episodes modal is shown/hidden
+  useEffect(() => {
+    const handleOrientationChange = async (event) => {
+      const currentOrientation = event.orientationInfo.orientation;
+      // Check if it's one of the portrait orientations (numeric values vary by platform/expo version)
+      // ScreenOrientation.Orientation.PORTRAIT_UP, ScreenOrientation.Orientation.PORTRAIT_DOWN
+      // A simpler check might be if it's NOT landscape
+      if (
+        currentOrientation !== ScreenOrientation.Orientation.LANDSCAPE_LEFT &&
+        currentOrientation !== ScreenOrientation.Orientation.LANDSCAPE_RIGHT
+      ) {
+        console.log(`[Orientation Debug] Episodes Modal: Detected non-landscape orientation (${currentOrientation}), attempting to re-lock to LANDSCAPE.`);
+        try {
+          await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
+        } catch (e) {
+          console.error("[Orientation Debug] Episodes Modal: Failed to re-lock to LANDSCAPE on orientation change:", e);
+        }
+      }
+    };
+
+    if (showEpisodesModal) {
+      // Lock to landscape when modal becomes visible
+      ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE)
+        .then(() => console.log("[Orientation Debug] Episodes Modal: Initial lock to LANDSCAPE on becoming visible."))
+        .catch(e => console.error("[Orientation Debug] Episodes Modal: Failed initial lock to LANDSCAPE:", e));
+
+      // Add listener
+      if (!episodesModalOrientationListenerRef.current) {
+        episodesModalOrientationListenerRef.current = ScreenOrientation.addOrientationChangeListener(handleOrientationChange);
+        console.log("[Orientation Debug] Episodes Modal: Orientation change listener added.");
+        
+        // AGGRESSIVE: Try to lock again immediately after listener is added,
+        // as the modal might be starting its presentation sequence now.
+        ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE)
+          .then(() => console.log("[Orientation Debug] Episodes Modal: Aggressive re-lock post-listener add."))
+          .catch(e => console.error("[Orientation Debug] Episodes Modal: Failed aggressive re-lock post-listener add:", e));
+      }
+    } else {
+      // Remove listener when modal is hidden
+      if (episodesModalOrientationListenerRef.current) {
+        ScreenOrientation.removeOrientationChangeListener(episodesModalOrientationListenerRef.current);
+        episodesModalOrientationListenerRef.current = null;
+        console.log("[Orientation Debug] Episodes Modal: Orientation change listener removed.");
+        // Optionally, re-lock to landscape one last time after modal is fully gone if needed,
+        // but the main player screen should already enforce this.
+        // ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE).catch(()=>{});
+      }
+    }
+
+    return () => {
+      // Cleanup: Remove listener if component unmounts while modal is shown
+      if (episodesModalOrientationListenerRef.current) {
+        ScreenOrientation.removeOrientationChangeListener(episodesModalOrientationListenerRef.current);
+        episodesModalOrientationListenerRef.current = null;
+        console.log("[Orientation Debug] Episodes Modal: Orientation change listener removed on unmount.");
+      }
+    };
+  }, [showEpisodesModal]); // Re-run this effect when showEpisodesModal changes
   
   // --- Logging Wrappers for State Setters --- (Keep if used elsewhere, remove if only for countdown)
   // NOTE: Reviewing if logSetShowControls is still needed without countdown logic. Keeping for now.
@@ -545,6 +616,107 @@ const VideoPlayerScreen = ({ route }) => {
 
   // --- End Subtitle Logic ---
 
+  // --- Episodes Viewer Modal Logic ---
+  const toggleEpisodesModal = async () => {
+    if (!showEpisodesModal) { // If modal is currently hidden, we are preparing to OPEN it
+      try {
+        console.log("[Orientation Debug] Attempting to lock to LANDSCAPE before opening episodes modal.");
+        await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
+        console.log("[Orientation Debug] Successfully locked to LANDSCAPE.");
+
+        // Introduce a short delay to allow the orientation change to fully propagate
+        // before the modal attempts to render.
+        await new Promise(resolve => setTimeout(resolve, 100)); // 100ms delay
+        console.log("[Orientation Debug] Delay completed after landscape lock.");
+
+      } catch (e) {
+        console.error("[Orientation Debug] Failed to lock orientation or during delay before opening episodes modal:", e);
+      }
+      
+      // Start fetching data if it's a TV show (can happen while modal is becoming visible)
+      if (mediaType === 'tv') {
+        fetchAllSeasonsAndEpisodes();
+      }
+      setShowEpisodesModal(true); // Now, set the modal to visible
+    } else { // If modal is currently visible, we are preparing to CLOSE it
+      setShowEpisodesModal(false);
+      try {
+        // Re-lock to ensure it stays landscape after modal closes via the toggle button.
+        // onRequestClose handles other close scenarios (hardware back button, modal's own close button).
+        await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
+        console.log("[Orientation Debug] Re-locked to LANDSCAPE on modal toggle-close (button).");
+      } catch (e) {
+        console.error("[Orientation Debug] Failed to re-lock to LANDSCAPE on modal toggle-close (button):", e);
+      }
+    }
+    setShowControls(true); // Keep controls visible when modal is toggled
+  };
+
+  const fetchAllSeasonsAndEpisodes = async () => {
+    if (mediaType !== 'tv' || !mediaId) return;
+    setIsLoadingModalEpisodes(true);
+    try {
+      const showData = await fetchTVShowDetails(mediaId);
+      if (showData && showData.seasons) {
+        // Filter out "Specials" (season_number 0) unless it's the only season
+        const validSeasons = showData.seasons.filter(s => s.season_number > 0 || showData.seasons.length === 1);
+        
+        const seasonsWithDetails = await Promise.all(
+          validSeasons.map(async (s) => {
+            const seasonDetail = await fetchSeasonDetails(mediaId, s.season_number);
+            // Fetch watch progress for each episode in this season
+            const episodesWithProgress = await Promise.all(
+              (seasonDetail?.episodes || []).map(async (ep) => {
+                const progressKey = `tv-${mediaId}-s${s.season_number}-e${ep.episode_number}`;
+                const progress = await getWatchProgress(progressKey); // Use specific key for episode progress
+                return { ...ep, watchProgress: progress };
+              })
+            );
+            return { ...s, episodes: episodesWithProgress || [] };
+          })
+        );
+        setAllSeasonsData(seasonsWithDetails);
+        // Set the current season as initially selected in the modal
+        const currentSeasonInModal = seasonsWithDetails.find(s => s.season_number === season);
+        if (currentSeasonInModal) {
+          setSelectedSeasonForModal(currentSeasonInModal.season_number);
+          setEpisodesForModal(currentSeasonInModal.episodes);
+        } else if (seasonsWithDetails.length > 0) {
+          // Fallback to the first season if current is not found (e.g., specials only)
+          setSelectedSeasonForModal(seasonsWithDetails[0].season_number);
+          setEpisodesForModal(seasonsWithDetails[0].episodes);
+        }
+      }
+    } catch (err) {
+      console.error("Error fetching all seasons for modal:", err);
+      // Optionally set an error state for the modal
+    } finally {
+      setIsLoadingModalEpisodes(false);
+    }
+  };
+
+  const handleSelectSeasonForModal = async (selectedSeasonNumber) => {
+    setSelectedSeasonForModal(selectedSeasonNumber);
+    const seasonData = allSeasonsData.find(s => s.season_number === selectedSeasonNumber);
+    if (seasonData) {
+      // Check if episodes already have progress, if not, fetch them (or re-fetch)
+      // This ensures progress is up-to-date if user watches an ep and reopens modal
+      setIsLoadingModalEpisodes(true);
+      const episodesWithProgress = await Promise.all(
+        (seasonData.episodes || []).map(async (ep) => {
+          // Use the specific contentId for each episode to get its progress
+          const episodeSpecificId = `tv-${mediaId}-s${selectedSeasonNumber}-e${ep.episode_number}`;
+          const progress = await getWatchProgress(episodeSpecificId);
+          return { ...ep, watchProgress: progress };
+        })
+      );
+      setEpisodesForModal(episodesWithProgress);
+      setIsLoadingModalEpisodes(false);
+    } else {
+      setEpisodesForModal([]);
+    }
+  };
+  // --- End Episodes Viewer Modal Logic ---
 
   // --- Listener Handlers ---
   const lastSaveTimeRef = useRef(0);
@@ -819,19 +991,30 @@ const VideoPlayerScreen = ({ route }) => {
           if (!isMounted || streamExtractionComplete || videoUrl) return;
           const processedUrl = Platform.OS === 'ios' ? streamUrl.replace('http://', 'https://') : streamUrl;
           saveStreamUrl(contentId, processedUrl);
+          // The duplicate declaration was here and has been removed.
+          // The following lines correctly use the 'processedUrl' declared above.
           setVideoUrl(processedUrl);
           setStreamExtractionComplete(true);
+          setManualWebViewVisible(false); // Hide WebView once stream is found
+          setCaptchaUrl(null);
         },
         (err) => {
           if (!isMounted) return;
-          //console.error("Error extracting stream:", err);
-          setError({ message: "Could not extract video stream." });
+          setError({ message: `Could not extract video stream: ${err.message}` });
           setStreamExtractionComplete(true);
           setLoading(false);
           setIsInitialLoading(false);
+          setManualWebViewVisible(false); // Hide on error too
+          setCaptchaUrl(null);
+        },
+        (urlForCaptcha) => { // onManualInterventionRequired
+          if (!isMounted) return;
+          // console.log("[VideoPlayerScreen] Manual intervention required for CAPTCHA on URL:", urlForCaptcha); // Removed debug log
+          setCaptchaUrl(urlForCaptcha);
+          setManualWebViewVisible(true);
         }
       );
-      setWebViewConfig(config);
+      setWebViewConfig(config); // Store the original config
     };
 
     const initializePlayer = async () => {
@@ -1036,6 +1219,8 @@ const VideoPlayerScreen = ({ route }) => {
     setStreamExtractionComplete(false);
     setVideoUrl(null);
     setWebViewConfig(null);
+    setManualWebViewVisible(false); // Reset CAPTCHA view on reload
+    setCaptchaUrl(null);
     setResumeTime(0);
     setPosition(0);
     setDuration(0);
@@ -1259,6 +1444,157 @@ const VideoPlayerScreen = ({ route }) => {
     </Modal>
   );
 
+const renderEpisodesModal = () => {
+  if (mediaType !== 'tv') return null;
+
+  const renderEpisodeItem = ({ item: episodeData }) => {
+    const progress = episodeData.watchProgress;
+    let progressPercent = 0;
+    if (progress && progress.duration > 0 && progress.position > 0) {
+      progressPercent = (progress.position / progress.duration) * 100;
+    }
+
+    const episodePoster = episodeData.still_path
+      ? `https://image.tmdb.org/t/p/w300${episodeData.still_path}`
+      : null; // Fallback if no still_path
+
+    return (
+      <TouchableOpacity
+        style={styles.episodeItem}
+        onPress={() => {
+          if (season === episodeData.season_number && episode === episodeData.episode_number) {
+            setShowEpisodesModal(false);
+            return;
+          }
+          setIsUnmounting(true);
+          if (player) player.pause();
+          navigation.replace('VideoPlayer', {
+            mediaId: mediaId,
+            mediaType: 'tv',
+            season: episodeData.season_number,
+            episode: episodeData.episode_number,
+            title: title,
+            episodeTitle: episodeData.name,
+            poster_path: poster_path,
+          });
+        }}
+      >
+        <View style={styles.episodeImageContainer}>
+          {episodePoster ? (
+            <Image source={{ uri: episodePoster }} style={styles.episodeImage} />
+          ) : (
+            <View style={[styles.episodeImage, styles.placeholderImage]}>
+              <Ionicons name="tv-outline" size={40} color="#555" />
+            </View>
+          )}
+          {progressPercent > 0 && (
+            <View style={styles.episodeProgressOverlay}>
+              <View style={[styles.episodeProgressBar, { width: `${progressPercent}%` }]} />
+            </View>
+          )}
+        </View>
+        <View style={styles.episodeInfo}>
+          <Text style={styles.episodeNumberText} numberOfLines={1}>
+            Episode {episodeData.episode_number}{episodeData.name ? `: ${episodeData.name}` : ''}
+          </Text>
+          {progress && progress.duration > 0 && (
+             <Text style={styles.episodeDurationText}>
+              {formatTime(progress.duration - (progress.position || 0))} left
+            </Text>
+          )}
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
+  return (
+    <Modal
+      animationType="fade"
+      transparent={true}
+      visible={showEpisodesModal}
+      presentationStyle="overFullScreen" // Explicitly set presentation style
+      supportedOrientations={['landscape', 'landscape-left', 'landscape-right']} // Explicitly support only landscape
+      onShow={async () => { // Add onShow handler to re-affirm landscape lock
+        try {
+          console.log("[Orientation Debug] Episodes Modal onShow: Attempting to lock to LANDSCAPE.");
+          await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
+          console.log("[Orientation Debug] Episodes Modal onShow: Successfully locked to LANDSCAPE.");
+        } catch (e) {
+          console.error("[Orientation Debug] Episodes Modal onShow: Failed to lock orientation:", e);
+        }
+      }}
+      onRequestClose={() => {
+        setShowEpisodesModal(false);
+        // Ensure re-locking to landscape when modal is closed by hardware back or swipe
+        ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE)
+          .catch(e => console.error("Failed to re-lock orientation on modal close:", e));
+      }}
+    >
+      <View style={styles.episodesModalOverlay}>
+        <View style={styles.episodesModalContent}>
+          <View style={styles.episodesModalHeader}>
+            <Text style={styles.episodesModalTitle}>{title} - Episodes</Text>
+            <TouchableOpacity onPress={() => setShowEpisodesModal(false)} style={styles.episodesModalCloseButton}>
+              <Ionicons name="close" size={28} color="white" />
+            </TouchableOpacity>
+          </View>
+
+          {isLoadingModalEpisodes && !allSeasonsData.length ? (
+            <ActivityIndicator size="large" color="#E50914" style={{ flex: 1 }} />
+          ) : (
+            <>
+              {allSeasonsData.length > 1 && (
+                <View style={styles.seasonSelectorContainer}>
+                  <FlatList
+                    horizontal
+                    data={allSeasonsData.sort((a, b) => a.season_number - b.season_number)}
+                    renderItem={({ item: seasonItem }) => (
+                      <TouchableOpacity
+                        style={[
+                          styles.seasonTab,
+                          selectedSeasonForModal === seasonItem.season_number && styles.seasonTabSelected,
+                        ]}
+                        onPress={() => handleSelectSeasonForModal(seasonItem.season_number)}
+                      >
+                        <Text style={styles.seasonTabText}>
+                          {seasonItem.name || `Season ${seasonItem.season_number}`}
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                    keyExtractor={(item) => `season-${item.id || item.season_number}`}
+                    showsHorizontalScrollIndicator={false}
+                  />
+                </View>
+              )}
+              {isLoadingModalEpisodes && episodesForModal.length === 0 ? (
+                  <View style={styles.centeredLoader}>
+                    <ActivityIndicator size="large" color="#E50914" />
+                  </View>
+              ) : episodesForModal.length > 0 ? (
+                <FlatList
+                  data={episodesForModal.sort((a,b) => a.episode_number - b.episode_number)}
+                  renderItem={renderEpisodeItem}
+                  keyExtractor={(item) => `ep-${item.id || (item.season_number +'_'+ item.episode_number)}`}
+                  horizontal={true} // Make episode list scroll horizontally
+                  showsHorizontalScrollIndicator={false} // Hide scrollbar for Netflix-like feel
+                  contentContainerStyle={styles.episodesListContent}
+                  initialNumToRender={4} // Adjust for horizontal list
+                  maxToRenderPerBatch={6} // Adjust for horizontal list
+                  windowSize={8} // Adjust for horizontal list
+                />
+              ) : (
+                <View style={styles.centeredMessage}>
+                  <Text style={styles.noEpisodesText}>No episodes found for this season.</Text>
+                </View>
+              )}
+            </>
+          )}
+        </View>
+      </View>
+    </Modal>
+  );
+};
+
 
   const renderNextEpisodeButton = () => {
     if (!showNextEpisodeButton) return null;
@@ -1287,11 +1623,46 @@ const VideoPlayerScreen = ({ route }) => {
       <View style={styles.container} onLayout={onLayoutRootView}>
         <StatusBar hidden />
 
-      {/* Hidden WebView */}
+      {/* WebView for stream extraction / CAPTCHA */}
       {webViewConfig && !streamExtractionComplete && (
-        <View style={styles.hiddenWebView}>
+        <View style={manualWebViewVisible ? styles.visibleWebViewForCaptcha : styles.hiddenWebView}>
           <WebView
-            {...webViewConfig}
+            // Key prop helps to re-mount WebView if URI changes significantly, might help with CAPTCHA state
+            key={manualWebViewVisible ? captchaUrl : 'initial-hidden-webview'}
+            source={manualWebViewVisible && captchaUrl ? { uri: captchaUrl, headers: webViewConfig.source.headers } : webViewConfig.source}
+            injectedJavaScript={webViewConfig.injectedJavaScript}
+            onMessage={webViewConfig.onMessage}
+            // We need to ensure onError and onHttpError from webViewConfig are correctly passed
+            // especially when the CAPTCHA view is active.
+            // The webViewConfig contains the callbacks that eventually call setVideoUrl or setError.
+            // If the user solves the CAPTCHA, the page should navigate, and our injectedJS should find the stream.
+            // The original onMessage should then be triggered.
+            onError={(syntheticEvent) => {
+                // If CAPTCHA view is active, an error here might mean CAPTCHA itself failed to load
+                // or user navigated to a broken page within the CAPTCHA flow.
+                // We might want to allow retry or provide a message.
+                if (manualWebViewVisible) {
+                    // console.error('[VideoPlayerScreen] Error in visible CAPTCHA WebView:', syntheticEvent.nativeEvent); // Removed debug log
+                    // Optionally, set an error or allow user to close/retry CAPTCHA
+                } else if (webViewConfig.onError) {
+                    webViewConfig.onError(syntheticEvent);
+                }
+            }}
+            onHttpError={(syntheticEvent) => {
+                // If CAPTCHA view is active, an HTTP error might be part of CAPTCHA flow (e.g. submitting it)
+                // or an issue with the CAPTCHA service.
+                // We generally want the original onHttpError to fire if it's still a 403,
+                // but if it's visible, the user is handling it.
+                // The original onHttpError from streamExtractor is what triggers onManualInterventionRequired.
+                // If it happens *again* while visible, it's a bit of a loop.
+                // For now, let's assume if it's visible, the user is interacting.
+                // The primary goal is for the page to eventually load so onMessage can fire.
+                if (manualWebViewVisible) {
+                     // console.warn('[VideoPlayerScreen] HTTP Error in visible CAPTCHA WebView:', syntheticEvent.nativeEvent); // Removed debug log
+                } else if (webViewConfig.onHttpError) {
+                    webViewConfig.onHttpError(syntheticEvent);
+                }
+            }}
             javaScriptEnabled={true}
             domStorageEnabled={true}
             allowsInlineMediaPlayback={true}
@@ -1316,12 +1687,31 @@ const VideoPlayerScreen = ({ route }) => {
           </SafeAreaView>
           <ActivityIndicator size="large" color="#E50914" />
           <Text style={styles.loadingText}>
-            {streamExtractionComplete ? 'Loading video...' : 'Extracting video stream...'}
+            {manualWebViewVisible ? 'Please click the CAPTCHA checkbox below.' :
+             streamExtractionComplete ? 'Loading video...' : 'Extracting video stream...'}
           </Text>
-          {!streamExtractionComplete && (
+          {!streamExtractionComplete && !manualWebViewVisible && (
             <Text style={styles.loadingSubText}>
               This may take up to 30 seconds...
             </Text>
+          )}
+          {manualWebViewVisible && (
+            <>
+              <Text style={styles.captchaInfoText}>
+                If you see this often, a VPN or network issue might be the cause.
+              </Text>
+              <TouchableOpacity style={styles.captchaDoneButton} onPress={() => {
+               // This button doesn't directly trigger stream finding,
+               // but user might click it after solving.
+               // The injected JS should still post a message when the stream is found.
+               // For now, just hides the CAPTCHA view and hopes for the best.
+               // A more robust solution might involve re-triggering aspects of the WebView.
+               setManualWebViewVisible(false);
+               // Optionally, could add a small delay then re-check if stream was found, or show a "Still trying..."
+             }}>
+               <Text style={styles.captchaDoneButtonText}>I've clicked it / Close</Text>
+             </TouchableOpacity>
+            </>
           )}
         </View>
       )}
@@ -1402,7 +1792,11 @@ const VideoPlayerScreen = ({ route }) => {
             </View>
             {/* Subtitle Toggle/Selection Buttons */}
             <View style={styles.topRightButtons}>
-              {/* Subtitle buttons are now hidden */}
+              {mediaType === 'tv' && (
+                <TouchableOpacity onPress={toggleEpisodesModal} style={styles.controlButton}>
+                  <Ionicons name="list" size={24} color="white" />
+                </TouchableOpacity>
+              )}
               {/* <RemotePlaybackButton style={styles.controlButton} /> */}
             </View>
           </SafeAreaView>
@@ -1465,16 +1859,30 @@ const VideoPlayerScreen = ({ route }) => {
 
       {/* Subtitle Selection Modal */}
       {renderSubtitleSelectionModal()}
+    
+      {/* Episodes Viewer Modal */}
+      {mediaType === 'tv' && renderEpisodesModal()}
       </View>
-    </GestureHandlerRootView>
-  );
-};
-
-const styles = StyleSheet.create({
+        </GestureHandlerRootView>
+      );
+    };
+    
+    const styles = StyleSheet.create({
   // ... (keep all existing styles) ...
   gestureHandlerRoot: { flex: 1 },
   container: { flex: 1, backgroundColor: '#000' },
-  hiddenWebView: { position: 'absolute', width: 1, height: 1, opacity: 0, zIndex: -1 },
+  hiddenWebView: { position: 'absolute', width: 1, height: 1, opacity: 0, zIndex: -1, top: -1000, left: -1000 }, // Ensure it's truly off-screen
+  visibleWebViewForCaptcha: {
+    position: 'absolute',
+    bottom: 20, // Position it somewhere visible but not obscuring everything
+    left: 20,
+    right: 20,
+    height: '60%', // Make it large enough for interaction
+    backgroundColor: 'white', // So it's visible
+    zIndex: 100, // Above other loading elements
+    borderWidth: 1,
+    borderColor: '#ccc',
+  },
   video: { flex: 1, backgroundColor: '#000' },
   loaderContainer: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center', backgroundColor: '#000', zIndex: 10 },
   loadingBackButtonContainer: { position: 'absolute', top: 0, left: 0, right: 0, padding: 10, zIndex: 11 },
@@ -1625,6 +2033,161 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: 16,
   },
+  captchaDoneButton: {
+    marginTop: 20,
+    paddingVertical: 10,
+    paddingHorizontal: 15,
+    backgroundColor: '#E50914',
+    borderRadius: 5,
+  },
+  captchaDoneButtonText: {
+    color: 'white',
+    fontWeight: 'bold',
+  },
+  captchaInfoText: {
+    color: '#aaa',
+    fontSize: 12,
+    marginTop: 10,
+    textAlign: 'center',
+    paddingHorizontal: 20,
+  },
   // --- End Subtitle Styles ---
+
+  // --- Episodes Modal Styles ---
+  episodesModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.85)',
+    justifyContent: 'center', // Center the modal content vertically
+    alignItems: 'center',   // Center the modal content horizontally
+  },
+  episodesModalContent: {
+    backgroundColor: '#141414',
+    width: '90%', // Take 90% of screen width
+    height: '90%', // Take 90% of screen height
+    borderRadius: 15, // Apply border radius to all corners
+    paddingTop: 10, // Keep some padding at the top
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 }, // Adjust shadow for centered modal
+    shadowOpacity: 0.6,
+    shadowRadius: 10,
+    elevation: 20,
+    overflow: 'hidden', // Ensure content respects border radius
+  },
+  episodesModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#333',
+  },
+  episodesModalTitle: {
+    color: 'white',
+    fontSize: 20,
+    fontWeight: 'bold',
+  },
+  episodesModalCloseButton: {
+    padding: 5,
+  },
+  seasonSelectorContainer: {
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#333',
+  },
+  seasonTab: {
+    paddingVertical: 8,
+    paddingHorizontal: 15,
+    borderRadius: 20,
+    backgroundColor: '#333',
+    marginRight: 10,
+  },
+  seasonTabSelected: {
+    backgroundColor: '#E50914',
+  },
+  seasonTabText: {
+    color: 'white',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  episodesListContent: {
+    paddingHorizontal: 15, // Padding at the start and end of the horizontal list
+    paddingVertical: 15,   // Padding above and below the list
+    // The FlatList itself will be a child of episodesModalContent, which has flex:1 (implicitly via height: '90%')
+    // So, the FlatList needs to be able to expand.
+    // If episodesModalContent has a fixed height, FlatList might need flex: 1 to fill it.
+    // For now, let's assume the content height will be driven by its children (header, season selector, episode list)
+  },
+  episodeItem: {
+    flexDirection: 'column', // Image above text
+    backgroundColor: '#222',
+    borderRadius: 8,
+    marginRight: 12, // Space between horizontal items
+    overflow: 'hidden',
+    width: 178, // Approx 16:9 for 100px height image (177.77 -> 178)
+    // Height will be determined by image + text content
+  },
+  episodeImageContainer: {
+    width: '100%', // Full width of the card
+    height: 100,    // Fixed height for the image part
+    backgroundColor: '#333',
+    // borderRadius: 0, // Card itself has borderRadius, image container doesn't need its own if it's top part
+    overflow: 'hidden', // Ensure image respects this container's bounds
+    position: 'relative', // For progress bar overlay
+  },
+  episodeImage: {
+    width: '100%',
+    height: '100%',
+  },
+  placeholderImage: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#282828',
+  },
+  episodeProgressOverlay: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 5,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+  },
+  episodeProgressBar: {
+    height: '100%',
+    backgroundColor: '#E50914',
+  },
+  episodeInfo: {
+    padding: 8, // General padding for text content below the image
+    // No flex: 1 needed, height will be auto based on text content
+    // justifyContent: 'flex-start', // Default is fine
+  },
+  episodeNumberText: {
+    color: 'white',
+    fontSize: 13, // Slightly smaller for card layout
+    fontWeight: '600',
+    marginBottom: 3, // Adjust spacing
+  },
+  episodeDurationText: {
+    color: '#888',
+    fontSize: 11, // Slightly smaller for card layout
+  },
+  centeredLoader: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  centeredMessage: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  noEpisodesText: {
+    color: '#888',
+    fontSize: 16,
+    textAlign: 'center',
+  },
+  // --- End Episodes Modal Styles ---
 });
 export default VideoPlayerScreen;
