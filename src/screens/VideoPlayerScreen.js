@@ -192,7 +192,15 @@ const VideoPlayerScreen = ({ route }) => {
     }
   });
 
-  player.timeUpdateEventInterval = 1;
+  useEffect(() => {
+    if (player && videoUrl) {
+      if (showControls) {
+        player.timeUpdateEventInterval = 1;
+      } else {
+        player.timeUpdateEventInterval = 1000;
+      }
+    }
+  }, [player, videoUrl, showControls]);
 
   const contentId = mediaType === 'tv'
     ? `tv-${mediaId}-s${season}-e${episode}`
