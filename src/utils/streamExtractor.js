@@ -20,12 +20,80 @@ export const extractM3U8Stream = (tmdbId, type, season, episode, onStreamFound, 
 
     // JavaScript to inject into the WebView to intercept and extract m3u8 links
     const injectedJavaScript = `
+    function waitForElement(selector) {
+        return new Promise((resolve) => {
+            const interval = setInterval(() => {
+                const element = document.querySelector(selector);
+                if (element) {
+                    clearInterval(interval);
+                    resolve(element);
+                }
+            }, 100);
+        });
+    }
+
     (function() {
       // Store original fetch and XMLHttpRequest to monitor network requests
       const originalFetch = window.fetch;
       const originalXHR = window.XMLHttpRequest;
       let m3u8UrlsFound = [];
       let mainM3u8Found = false;
+
+      waitForElement('#player > iframe').then(iframe => {
+        window.location.href = iframe.src;
+      });
+
+      let videoElementInteracted = false; // To control click simulation
+
+      waitForElement('video').then(videoElement => {
+        // Attempt to play programmatically
+        videoElement.play();
+
+        // Try to simulate a click on the video element itself after a delay
+        // This can help trigger players that require a click on their overlay
+        if (!videoElementInteracted) {
+          setTimeout(() => {
+            try {
+              videoElement.click();
+            } catch (ignored) {}
+            // Set flag after attempt, regardless of success, to avoid repeated clicks if logic were to re-enter
+            videoElementInteracted = true;
+          }, 1500); // Delay to allow player to potentially initialize
+        }
+
+        // Check videoElement.src after a further delay, as it might be set after play() or click()
+        // This also corrects the original logic which prematurely set mainM3u8Found
+        setTimeout(() => {
+            const currentSrc = videoElement.src;
+            if (currentSrc && (currentSrc.includes('.m3u8') || currentSrc.includes('.mp4'))) { // Check for m3u8 (mp4 check commented for now)
+              // Only consider this a "main" stream if one hasn't been definitively found by fetch/XHR yet
+              // and if it's not already in our list.
+              if (!m3u8UrlsFound.includes(currentSrc)) {
+                  m3u8UrlsFound.push(currentSrc);
+                  // If no main M3U8 (master/playlist) has been found yet via network requests,
+                  // this src (if m3u8) could be it.
+                  if (!mainM3u8Found && currentSrc.includes('.m3u8')) {
+                      mainM3u8Found = true; // Tentatively mark as main
+                      window.ReactNativeWebView.postMessage(JSON.stringify({
+                          type: 'stream',
+                          url: currentSrc
+                      }));
+                  } else {
+                      // Otherwise, it's a candidate
+                      window.ReactNativeWebView.postMessage(JSON.stringify({
+                          type: 'stream_candidate',
+                          url: currentSrc
+                      }));
+                  }
+              }
+            }
+        }, 3000);
+
+      });
+
+      waitForElement("#fixed-container > div.flex.flex-col.items-center.gap-y-3.title-year > button").then(elem => {
+        setTimeout(() => elem.click(), 1000);
+      });
 
       // Override fetch to monitor for m3u8 requests
       window.fetch = async function(...args) {

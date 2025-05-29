@@ -180,7 +180,28 @@ export const getCachedStreamUrl = async (contentId) => {
   }
 };
 
-export const clearStreamCache = async () => {
+// Clear a specific stream URL from the cache
+export const clearSpecificStreamFromCache = async (contentId) => {
+  if (!contentId) {
+    console.warn('clearSpecificStreamFromCache called with no contentId');
+    return;
+  }
+  try {
+    const cacheString = await AsyncStorage.getItem(STREAM_CACHE_KEY);
+    const cache = cacheString ? JSON.parse(cacheString) : {};
+    if (cache[contentId]) {
+      delete cache[contentId];
+      await AsyncStorage.setItem(STREAM_CACHE_KEY, JSON.stringify(cache));
+      console.log(`Cleared cached stream URL for ${contentId} from main cache object.`);
+    } else {
+      console.log(`No cached stream URL found for ${contentId} in main cache object to clear.`);
+    }
+  } catch (e) {
+    console.error(`Failed to clear cached stream URL for ${contentId} from main cache object.`, e);
+  }
+};
+
+export const clearStreamCache = async () => { // This clears the ENTIRE cache
   try {
     await AsyncStorage.removeItem(STREAM_CACHE_KEY);
   } catch (error) {

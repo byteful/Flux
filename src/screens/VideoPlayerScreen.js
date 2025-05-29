@@ -8,7 +8,7 @@ import Slider from '@react-native-community/slider';
 import { VideoView, useVideoPlayer, RemotePlaybackButton } from 'expo-video';
 import { WebView } from 'react-native-webview';
 import { fetchTVShowDetails, fetchSeasonDetails } from '../api/tmdbApi';
-import { saveWatchProgress, getWatchProgress, getCachedStreamUrl, saveStreamUrl, getAutoPlaySetting, getEpisodeWatchProgress } from '../utils/storage';
+import { saveWatchProgress, getWatchProgress, getCachedStreamUrl, saveStreamUrl, getAutoPlaySetting, getEpisodeWatchProgress, clearSpecificStreamFromCache } from '../utils/storage';
 import { extractM3U8Stream } from '../utils/streamExtractor';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
@@ -20,6 +20,7 @@ import { runOnJS } from 'react-native-reanimated';
 
 // Constants for auto-play
 const VIDEO_END_THRESHOLD_SECONDS = 45; // Show button 45 secs before end
+const BUFFER_TIMEOUT = 10; // 10 seconds
 
 const VideoPlayerScreen = ({ route }) => {
   const navigation = useNavigation(); // Use hook for navigation access
@@ -31,6 +32,11 @@ const VideoPlayerScreen = ({ route }) => {
   const lastPositionRef = useRef(0); // Ref for manual end detection
   const lastPositionTimeRef = useRef(0); // Ref for manual end detection
   const manualFinishTriggeredRef = useRef(false); // Ref for manual end detection flag
+  const bufferingTimeoutRef = useRef(null); // Ref for buffering timeout
+
+  // --- Buffering Alert State ---
+  const [showBufferingAlert, setShowBufferingAlert] = useState(false);
+  // --- End Buffering Alert State ---
 
   const {
     mediaId,
@@ -52,6 +58,7 @@ const VideoPlayerScreen = ({ route }) => {
   // ... existing states ...
   const [loading, setLoading] = useState(true);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
+  const [isBufferingVideo, setIsBufferingVideo] = useState(false); // New state for buffering
   const [error, setError] = useState(null);
   const [streamExtractionComplete, setStreamExtractionComplete] = useState(false);
   const [showControls, setShowControls] = useState(false);
@@ -688,62 +695,117 @@ const VideoPlayerScreen = ({ route }) => {
   // --- Event Listeners using useEventListener ---
   // ... (keep existing listeners for statusChange, timeUpdate, playingChange, error) ...
   useEventListener(player, 'statusChange', (event) => {
-    const status = event?.status ?? event; // Get status first
-
+    const status = event?.status ?? event;
     if (isUnmounting) return;
 
+    const clearBufferingTimer = () => {
+      if (bufferingTimeoutRef.current) {
+        clearTimeout(bufferingTimeoutRef.current);
+        bufferingTimeoutRef.current = null;
+      }
+    };
 
+    const startBufferingTimer = () => {
+      clearBufferingTimer(); // Always clear previous before starting new
+      bufferingTimeoutRef.current = setTimeout(() => {
+        // Check if player exists AND alert is not already visible
+        if (player && !showBufferingAlert) {
+          runOnJS(setShowBufferingAlert)(true);
+        }
+      }, BUFFER_TIMEOUT * 1000);
+    };
+
+    let newIsBufferingVideoState = isBufferingVideo;
+    let newLoadingState = loading;
+    let newIsInitialLoadingState = isInitialLoading;
+
+    // Determine current buffering status from player
+    const isPlayerActuallyBuffering = (typeof status === 'object' && status.isBuffering) ||
+                                  (typeof status === 'string' && status === 'loading');
+
+    if (isPlayerActuallyBuffering) {
+      newIsBufferingVideoState = true;
+      startBufferingTimer();
+    } else {
+      newIsBufferingVideoState = false;
+      clearBufferingTimer();
+    }
+
+    // Determine if video is loaded/ready
+    const isPlayerLoadedAndReady = (typeof status === 'object' && status.isLoaded && !status.isBuffering) ||
+                               (typeof status === 'string' && status === 'readyToPlay');
+
+    // Determine if video has errored or failed
+    const hasPlayerErroredOrFailed = (typeof status === 'string' && (status === 'error' || status === 'failed')) ||
+                                (typeof status === 'object' && status.error); // Check for error object in status
+
+    // Determine if video has finished
+    const hasPlayerFinishedPlaying = (typeof status === 'string' && status === 'finished');
+
+    if (isPlayerLoadedAndReady) {
+      newIsInitialLoadingState = false;
+      newLoadingState = false;
+    } else if (hasPlayerErroredOrFailed) {
+      newIsInitialLoadingState = false; // Allow error screen to show
+      newLoadingState = false;
+    } else if (hasPlayerFinishedPlaying) {
+      newLoadingState = false;
+      // newIsInitialLoadingState should already be false if playback finished
+    } else {
+      // Not loaded, not errored, not finished.
+      // If isInitialLoading is still true, newLoadingState will be true.
+      // If past initial loading, general loading should be true.
+      if (!newIsInitialLoadingState) {
+        newLoadingState = true;
+      }
+    }
+
+    // Ensure 'loading' is true if 'isInitialLoading' is true.
+    if (newIsInitialLoadingState) {
+      newLoadingState = true;
+    }
+
+    // Apply state changes if they differ to avoid unnecessary re-renders
+    if (newIsBufferingVideoState !== isBufferingVideo) {
+      setIsBufferingVideo(newIsBufferingVideoState);
+    }
+    if (newIsInitialLoadingState !== isInitialLoading) {
+      setIsInitialLoading(newIsInitialLoadingState);
+    }
+    // Important: setLoading after setIsInitialLoading, as newLoadingState might depend on newIsInitialLoadingState
+    if (newLoadingState !== loading) {
+      setLoading(newLoadingState);
+    }
+
+    // Handle duration and natural size (these don't affect loading indicators directly)
     if (typeof status === 'object' && status !== null) {
       handleDurationChange(status.duration);
-      if (status.isLoaded && !status.isBuffering) {
-        if (loading) setLoading(false);
-        if (isInitialLoading) setIsInitialLoading(false);
-      } else if (status.isBuffering && !loading && isPlaying) {
-        setLoading(true);
-      }
-
-      // Extract naturalSize for zoom calculations
       if (status.naturalSize) {
         const { width: nw, height: nh, orientation: no } = status.naturalSize;
         let newNaturalSize = { width: nw, height: nh };
-        // Handle potential orientation mismatch in reported naturalSize
-        if (no === 'landscape' && nw < nh) {
-          newNaturalSize = { width: nh, height: nw };
-        } else if (no === 'portrait' && nw > nh) {
-          newNaturalSize = { width: nh, height: nw };
-        }
-
+        if (no === 'landscape' && nw < nh) newNaturalSize = { width: nh, height: nw };
+        else if (no === 'portrait' && nw > nh) newNaturalSize = { width: nh, height: nw };
         if (!videoNaturalSize || newNaturalSize.width !== videoNaturalSize.width || newNaturalSize.height !== videoNaturalSize.height) {
           setVideoNaturalSize(newNaturalSize);
         }
       }
-      // --- End Auto-play on Finish ---
-    } else if (typeof status === 'string') {
-      if (status === 'readyToPlay') {
-        if (loading) setLoading(false);
-        if (isInitialLoading) setIsInitialLoading(false);
-        if (player) {
-          const currentDuration = player.duration;
-          handleDurationChange(currentDuration);
-        }
-      } else if (status === 'loading' && !loading && isPlaying) {
-        setLoading(true);
-      } else if (status === 'finished') {
-        if (showNextEpisodeButton && autoPlayEnabled) {
-          playNextEpisode();
-        } else if (!showNextEpisodeButton && autoPlayEnabled && mediaType === 'tv') {
-          findNextEpisode().then(() => {
-            setTimeout(() => {
-              if (nextEpisodeDetailsRef.current) {
-                playNextEpisode();
-              } else {
-                handleGoBack(true);
-              }
-            }, 100);
-          });
-        } else if (!showNextEpisodeButton && autoPlayEnabled && mediaType === 'movie') {
-          handleGoBack(true);
-        }
+    } else if (typeof status === 'string' && status === 'readyToPlay' && player) {
+      handleDurationChange(player.duration);
+    }
+
+    // Autoplay on finish
+    if (hasPlayerFinishedPlaying) {
+      if (showNextEpisodeButton && autoPlayEnabled) {
+        playNextEpisode();
+      } else if (!showNextEpisodeButton && autoPlayEnabled && mediaType === 'tv') {
+        findNextEpisode().then(() => {
+          setTimeout(() => {
+            if (nextEpisodeDetailsRef.current) playNextEpisode();
+            else handleGoBack(true);
+          }, 100);
+        });
+      } else if (!showNextEpisodeButton && autoPlayEnabled && mediaType === 'movie') {
+        handleGoBack(true);
       }
     }
   });
@@ -912,6 +974,10 @@ const VideoPlayerScreen = ({ route }) => {
           clearTimeout(controlsTimerRef.current);
           controlsTimerRef.current = null;
         }
+        if (bufferingTimeoutRef.current) {
+          clearTimeout(bufferingTimeoutRef.current);
+          bufferingTimeoutRef.current = null;
+        }
       } catch (e) {
         console.error("Cleanup error:", e);
       }
@@ -1030,6 +1096,11 @@ const VideoPlayerScreen = ({ route }) => {
   }, [isUnmounting, player, position, navigationRef]); // Adjusted dependencies
 
   const handleReload = async () => {
+    if (bufferingTimeoutRef.current) {
+      clearTimeout(bufferingTimeoutRef.current);
+      bufferingTimeoutRef.current = null;
+    }
+    setShowBufferingAlert(false);
     setShowNextEpisodeButton(false);
     nextEpisodeDetailsRef.current = null;
     setIsFindingNextEpisode(false);
@@ -1222,6 +1293,56 @@ const VideoPlayerScreen = ({ route }) => {
   // If a pinch occurs, pinchToZoom will activate.
   const videoAreaGestures = Gesture.Race(pinchToZoom, tapToToggleControls);
   // --- End Pinch to Zoom Logic ---
+
+  // --- Buffering Alert Modal ---
+  const handleKeepBuffering = () => {
+    setShowBufferingAlert(false);
+    if (bufferingTimeoutRef.current) {
+      clearTimeout(bufferingTimeoutRef.current);
+      bufferingTimeoutRef.current = null;
+    }
+    // If player is still buffering, the statusChange listener will eventually
+    // call startBufferingTimer() again, effectively restarting the 30s countdown.
+  };
+
+  const handleRetryExtractionFromAlert = () => {
+    setShowBufferingAlert(false);
+    if (contentId) {
+      clearSpecificStreamFromCache(contentId);
+    }
+    handleReload();
+  };
+
+  const renderBufferingAlertModal = () => (
+    <Modal
+      animationType="fade"
+      transparent={true}
+      visible={showBufferingAlert}
+      supportedOrientations={['landscape-left', 'landscape-right', 'landscape']} // Added to respect screen lock
+      onRequestClose={() => {
+        // Android back button press
+        handleKeepBuffering();
+      }}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.bufferingAlertModalContent}>
+          <Text style={styles.modalTitle}>Still Buffering?</Text>
+          <Text style={styles.bufferingAlertText}>
+            The video has been buffering for a while.
+          </Text>
+          <View style={styles.bufferingAlertActions}>
+            <TouchableOpacity style={[styles.bufferingAlertButton, styles.bufferingAlertKeepButton]} onPress={handleKeepBuffering}>
+              <Text style={styles.bufferingAlertButtonText}>Keep Buffering</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.bufferingAlertButton, styles.bufferingAlertRetryButton]} onPress={handleRetryExtractionFromAlert}>
+              <Text style={styles.bufferingAlertButtonText}>Try Re-Extract</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+  // --- End Buffering Alert Modal ---
 
   // --- Render ---
 
@@ -1567,6 +1688,7 @@ const renderEpisodesModal = () => {
               nativeControls={false}
               allowsPictureInPicture={true}
               allowsExternalPlayback={true}
+              allowsVideoFrameAnalysis={false}
               resizeMode="contain" // Base resize mode is contain
               // pointerEvents="none" // Prevent VideoView from interfering with gestures on parent Animated.View
             />
@@ -1580,6 +1702,13 @@ const renderEpisodesModal = () => {
           <Text style={styles.subtitleText}>{currentSubtitleText}</Text>
         </View>
       ) : null}
+    
+          {/* Buffering Indicator */}
+          {isBufferingVideo && !isInitialLoading && (
+            <View style={styles.bufferingIndicatorContainer}>
+              <ActivityIndicator size="large" color="#FFF" />
+            </View>
+          )}
 
 
       {/* Black Transparent Overlay */}
@@ -1671,6 +1800,9 @@ const renderEpisodesModal = () => {
     
       {/* Episodes Viewer Modal */}
       {mediaType === 'tv' && renderEpisodesModal()}
+
+      {/* Buffering Alert Modal */}
+      {renderBufferingAlertModal()}
       </View>
         </GestureHandlerRootView>
       );
@@ -1697,7 +1829,7 @@ const renderEpisodesModal = () => {
   loadingBackButtonContainer: { position: 'absolute', top: 0, left: 0, right: 0, padding: 10, zIndex: 11 },
   loadingText: { color: '#fff', marginTop: 10 },
   loadingSubText: { color: '#aaa', fontSize: 12, marginTop: 5 },
-  bufferingIndicatorContainer: { position: 'absolute', top: '50%', left: '50%', transform: [{ translateX: -15 }, { translateY: -15 }], zIndex: 11, padding: 10, borderRadius: 5, backgroundColor: 'rgba(0, 0, 0, 0.6)' },
+  bufferingIndicatorContainer: { position: 'absolute', top: '50%', left: '50%', transform: [{ translateX: -18 }, { translateY: -18 }], zIndex: 4 },
   errorContainer: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center', backgroundColor: '#000', zIndex: 10, padding: 20 },
   errorText: { color: '#fff', marginBottom: 10, fontSize: 16, fontWeight: 'bold' },
   errorDetail: { color: '#888', marginBottom: 20, textAlign: 'center' },
@@ -1933,7 +2065,7 @@ const renderEpisodesModal = () => {
     justifyContent: 'flex-start', // Align content to the top
   },
   currentEpisodeItemHorizontal: {
-    backgroundColor: 'rgb(36, 36, 36)',
+    backgroundColor: 'rgb(46, 46, 46)',
   },
   episodeThumbnailContainerHorizontal: {
     width: '100%', // Thumbnail takes full width of the card
@@ -2016,5 +2148,52 @@ const renderEpisodesModal = () => {
     textAlign: 'center',
   },
   // --- End Episodes Modal Styles ---
+
+  // --- Buffering Alert Modal Styles ---
+  bufferingAlertModalContent: {
+    width: '85%',
+    maxWidth: 400,
+    backgroundColor: '#282828', // Darker background
+    borderRadius: 12,
+    padding: 25,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.5,
+    shadowRadius: 8,
+    elevation: 15,
+  },
+  bufferingAlertText: {
+    color: '#E0E0E0', // Lighter text for better contrast
+    fontSize: 15,
+    textAlign: 'center',
+    marginBottom: 25,
+    lineHeight: 22,
+  },
+  bufferingAlertActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-around', // Space out buttons
+    width: '100%',
+  },
+  bufferingAlertButton: {
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 8,
+    minWidth: 120, // Ensure buttons have a decent width
+    alignItems: 'center',
+    marginHorizontal: 10, // Add some space between buttons
+  },
+  bufferingAlertKeepButton: {
+    backgroundColor: '#4A4A4A', // Neutral dark gray
+  },
+  bufferingAlertRetryButton: {
+    backgroundColor: '#E50914', // Theme red for retry
+  },
+  bufferingAlertButtonText: {
+    color: 'white',
+    fontSize: 15,
+    fontWeight: 'bold',
+  },
+  // --- End Buffering Alert Modal Styles ---
 });
 export default VideoPlayerScreen;
