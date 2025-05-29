@@ -1959,7 +1959,7 @@ const renderEpisodesModal = () => {
     left: 0,
     right: 0,
     height: 5,
-    backgroundColor: 'rgba(0,0,0,0.6)',
+    backgroundColor: 'rgb(75, 75, 75)',
   },
   episodeProgressBarHorizontal: {
     height: '100%',

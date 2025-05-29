@@ -751,7 +751,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     height: 5, // Height of the progress bar
-    backgroundColor: 'rgba(0,0,0,0.5)', // Semi-transparent background for the bar container
+    backgroundColor: 'rgb(75, 75, 75)', // Semi-transparent background for the bar container
   },
   progressBar: {
     height: '100%',
