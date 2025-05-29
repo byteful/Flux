@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { View, StyleSheet, ActivityIndicator, BackHandler, Text, TouchableOpacity, Platform, PanResponder, Animated, Easing, Modal, FlatList, Dimensions, AppState, Image } from 'react-native';
-import { Picker } from '@react-native-picker/picker';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import * as ScreenOrientation from 'expo-screen-orientation';
@@ -515,6 +514,13 @@ const VideoPlayerScreen = ({ route }) => {
   // --- Episodes Viewer Modal Logic ---
   const toggleEpisodesModal = async () => {
     if (!showEpisodesModal) {
+      if (player && isPlaying) {
+        try {
+          player.pause();
+        } catch (e) {
+          console.error("Error pausing video on modal open:", e);
+        }
+      }
       try {
         await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
         await new Promise(resolve => setTimeout(resolve, 100));
@@ -1369,25 +1375,28 @@ const renderEpisodesModal = () => {
             <ActivityIndicator size="large" color="#E50914" style={{ flex: 1 }} />
           ) : (
             <>
-              {allSeasonsData.length > 0 && ( // Show picker only if there are seasons
-                <View style={styles.seasonPickerContainerStyle}>
-                  <Picker
-                    selectedValue={selectedSeasonForModal}
-                    style={styles.seasonPickerStyle}
-                    onValueChange={(itemValue) => handleSelectSeasonForModal(itemValue)}
-                    dropdownIconColor="white"
-                  >
-                    {allSeasonsData
-                      .sort((a, b) => a.season_number - b.season_number)
-                      .map((seasonItem) => (
-                        <Picker.Item
-                          key={`season-picker-${seasonItem.id || seasonItem.season_number}`}
-                          label={seasonItem.name || `Season ${seasonItem.season_number}`}
-                          value={seasonItem.season_number}
-                          color={Platform.OS === 'android' ? 'white' : undefined} // Picker.Item color prop is iOS only
-                        />
-                      ))}
-                  </Picker>
+              {allSeasonsData.length > 1 && ( // Only show season tabs if more than one season
+                <View style={styles.seasonSelectorContainer}>
+                  <FlatList
+                    horizontal
+                    data={allSeasonsData.sort((a, b) => a.season_number - b.season_number)}
+                    renderItem={({ item: seasonItem }) => (
+                      <TouchableOpacity
+                        style={[
+                          styles.seasonTab,
+                          selectedSeasonForModal === seasonItem.season_number && styles.seasonTabSelected,
+                        ]}
+                        onPress={() => handleSelectSeasonForModal(seasonItem.season_number)}
+                      >
+                        <Text style={styles.seasonTabText}>
+                          {seasonItem.name || `Season ${seasonItem.season_number}`}
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                    keyExtractor={(item) => `season-tab-${item.id || item.season_number}`}
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={styles.seasonTabContentContainer}
+                  />
                 </View>
               )}
               {isLoadingModalEpisodes && episodesForModal.length === 0 ? (
@@ -1418,7 +1427,6 @@ const renderEpisodesModal = () => {
     </Modal>
   );
 };
-
 
   const renderNextEpisodeButton = () => {
     if (!showNextEpisodeButton) return null;
@@ -1598,7 +1606,7 @@ const renderEpisodesModal = () => {
             <View style={styles.topRightButtons}>
               {mediaType === 'tv' && (
                 <TouchableOpacity onPress={toggleEpisodesModal} style={styles.controlButton}>
-                  <Ionicons name="list" size={24} color="white" />
+                  <Ionicons name="albums-outline" size={24} color="white" />
                 </TouchableOpacity>
               )}
               {/* <RemotePlaybackButton style={styles.controlButton} /> */}
@@ -1678,7 +1686,7 @@ const renderEpisodesModal = () => {
     bottom: 20, // Position it somewhere visible but not obscuring everything
     left: 20,
     right: 20,
-    height: '60%', // Make it large enough for interaction
+    height: '40%', // Make it large enough for interaction
     backgroundColor: 'white', // So it's visible
     zIndex: 100, // Above other loading elements
     borderWidth: 1,
@@ -1882,19 +1890,32 @@ const renderEpisodesModal = () => {
   episodesModalCloseButton: {
     padding: 5,
   },
-  seasonPickerContainerStyle: {
-    marginHorizontal: 20,
-    marginVertical: 10,
-    borderWidth: 1,
-    borderColor: '#555',
-    borderRadius: 5,
-    backgroundColor: '#333', // Background for the picker container itself
+  seasonSelectorContainer: { // Restored for horizontal season buttons
+    paddingHorizontal: 10, // Adjusted padding
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#282828',
+    backgroundColor: '#141414',
   },
-  seasonPickerStyle: {
-    height: 50,
-    width: '100%',
-    color: 'white', // Text color for selected item and dropdown arrow on iOS
-    // For Android, Picker.Item color is used for items in dropdown
+  seasonTabContentContainer: { // Added for FlatList content
+    paddingHorizontal: 10, // Inner padding for tabs
+  },
+  seasonTab: {
+    paddingVertical: 8,
+    paddingHorizontal: 15,
+    borderRadius: 8,
+    backgroundColor: '#333',
+    marginRight: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  seasonTabSelected: {
+    backgroundColor: '#E50914',
+  },
+  seasonTabText: {
+    color: 'white',
+    fontSize: 14,
+    fontWeight: 'bold',
   },
   episodesListContentHorizontal: { // Style for horizontal episode list
     paddingVertical: 15,
@@ -1908,12 +1929,11 @@ const renderEpisodesModal = () => {
     marginRight: 15, // Space between horizontal items
     padding: 10,
     width: 180, // Width for each episode item card
-    height: 280, // Fixed height for consistency
+    height: 220, // Fixed height for consistency
     justifyContent: 'flex-start', // Align content to the top
   },
   currentEpisodeItemHorizontal: {
-    borderColor: '#E50914',
-    borderWidth: 2,
+    backgroundColor: 'rgb(36, 36, 36)',
   },
   episodeThumbnailContainerHorizontal: {
     width: '100%', // Thumbnail takes full width of the card
