@@ -8,18 +8,35 @@ import Slider from '@react-native-community/slider';
 import { VideoView, useVideoPlayer, RemotePlaybackButton } from 'expo-video';
 import { WebView } from 'react-native-webview';
 import { fetchTVShowDetails, fetchSeasonDetails } from '../api/tmdbApi';
-import { saveWatchProgress, getWatchProgress, getCachedStreamUrl, saveStreamUrl, getAutoPlaySetting, getEpisodeWatchProgress, clearSpecificStreamFromCache } from '../utils/storage';
-import { extractM3U8Stream } from '../utils/streamExtractor';
+import {
+  saveWatchProgress,
+  getWatchProgress,
+  getCachedStreamUrl,
+  saveStreamUrl,
+  getAutoPlaySetting,
+  getEpisodeWatchProgress,
+  clearSpecificStreamFromCache,
+  saveLastSelectedSubtitleLanguage,
+  // getLastSelectedSubtitleLanguage,
+  // saveSubtitlesEnabledState, // Import new function
+  // getSubtitlesEnabledState // Import new function
+} from '../utils/storage';
+import { extractM3U8Stream, extractStreamFromSpecificSource } from '../utils/streamExtractor';
+import { getActiveStreamSources } from '../api/vidsrcApi';
+import SourceSelectionModal from '../components/SourceSelectionModal';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import { useEventListener } from 'expo';
-import parseSrt from 'parse-srt';
-import { searchSubtitles, downloadSubtitle } from '../api/opensubtitlesApi';
+// import parseSrt from 'parse-srt';
+// import { searchSubtitles, downloadSubtitle } from '../api/opensubtitlesApi';
 import { GestureHandlerRootView, GestureDetector, Gesture } from 'react-native-gesture-handler';
 import { runOnJS } from 'react-native-reanimated';
+// import SubtitlesModal from '../components/SubtitlesModal'; // Import the new modal
+// import { getLanguageName } from '../utils/languageUtils'; // Import the new utility
 
 // Constants for auto-play
 const VIDEO_END_THRESHOLD_SECONDS = 45; // Show button 45 secs before end
+const TWO_MINUTE_THRESHOLD_SECONDS = 120; // New threshold for conditional visibility
 const BUFFER_TIMEOUT = 20; // 20 seconds
 
 const VideoPlayerScreen = ({ route }) => {
@@ -69,7 +86,9 @@ const VideoPlayerScreen = ({ route }) => {
   const [position, setPosition] = useState(0);
   const [resumeTime, setResumeTime] = useState(0);
   const controlsTimerRef = useRef(null); // Use ref for timer ID
-  const [webViewConfig, setWebViewConfig] = useState(null);
+  const [currentWebViewConfig, setCurrentWebViewConfig] = useState(null); // Renamed from webViewConfig
+  const [currentSourceAttemptKey, setCurrentSourceAttemptKey] = useState('initial'); // For WebView key
+  const [currentAttemptingSource, setCurrentAttemptingSource] = useState(null); // To display current source
   const [retryAttempts, setRetryAttempts] = useState(0);
   const [isUnmounting, setIsUnmounting] = useState(false);
   const [brightnessLevel, setBrightnessLevel] = useState(1);
@@ -78,23 +97,31 @@ const VideoPlayerScreen = ({ route }) => {
   const [seekPreviewPosition, setSeekPreviewPosition] = useState(null);
   const [manualWebViewVisible, setManualWebViewVisible] = useState(false); // For CAPTCHA
   const [captchaUrl, setCaptchaUrl] = useState(null); // To store URL for visible WebView
+  const [isChangingSource, setIsChangingSource] = useState(false); // True when a source change attempt (via modal) is active
+  const [currentPlayingSourceName, setCurrentPlayingSourceName] = useState(null);
 
+  // --- Source Selection Modal States ---
+  const [showSourceSelectionModal, setShowSourceSelectionModal] = useState(false);
+  const [availableSourcesList, setAvailableSourcesList] = useState([]);
+  const [sourceAttemptStatus, setSourceAttemptStatus] = useState({}); // { [sourceName: string]: 'idle' | 'loading' | 'failed' | 'success' }
+  
   // --- New Auto-Play States ---
   const [autoPlayEnabled, setAutoPlayEnabled] = useState(false);
   const [showNextEpisodeButton, setShowNextEpisodeButton] = useState(false);
   const [isFindingNextEpisode, setIsFindingNextEpisode] = useState(false); // Prevent multiple fetches
   // --- End New Auto-Play States ---
 
-  // --- Subtitle States ---
-  const [availableLanguages, setAvailableLanguages] = useState({}); // Stores { langCode: bestSubtitleInfo }
-  const [selectedLanguage, setSelectedLanguage] = useState(null); // Stores selected language code ('en', 'es', etc.) or null
-  const [parsedSubtitles, setParsedSubtitles] = useState([]);
-  const [currentSubtitleText, setCurrentSubtitleText] = useState('');
-  const [showSubtitleSelection, setShowSubtitleSelection] = useState(false);
-  const [subtitlesEnabled, setSubtitlesEnabled] = useState(false); // Default to disabled
-  const [loadingSubtitles, setLoadingSubtitles] = useState(false);
-  // --- End Subtitle States ---
-
+  
+    // --- Subtitle States ---
+    // const [availableLanguages, setAvailableLanguages] = useState({}); // Stores { langCode: bestSubtitleInfo }
+    // const [selectedLanguage, setSelectedLanguage] = useState(null); // Stores selected language code ('en', 'es', etc.) or null
+    // const [parsedSubtitles, setParsedSubtitles] = useState([]);
+    // const [currentSubtitleText, setCurrentSubtitleText] = useState('');
+    // // const [showSubtitleSelection, setShowSubtitleSelection] = useState(false); // Removed
+    // const [subtitlesEnabled, setSubtitlesEnabled] = useState(false); // Default to disabled
+    // const [loadingSubtitles, setLoadingSubtitles] = useState(false);
+    // const [subtitleOffset, setSubtitleOffset] = useState(0); // In milliseconds
+    // --- End Subtitle States ---
   // --- Episodes Viewer Modal States ---
   const [showEpisodesModal, setShowEpisodesModal] = useState(false);
   const [allSeasonsData, setAllSeasonsData] = useState([]); // Stores [{ season_number, name, episode_count, episodes: [] }]
@@ -104,6 +131,15 @@ const VideoPlayerScreen = ({ route }) => {
   const [modalEpisodeProgress, setModalEpisodeProgress] = useState({}); // { 'sX_eY': { position, duration } }
   // --- End Episodes Viewer Modal States ---
 
+  
+    // --- Subtitles Modal State ---
+    // const [showSubtitlesModal, setShowSubtitlesModal] = useState(false);
+    // --- End Subtitles Modal State ---
+  
+    // --- Refs for Subtitle Preference Loading ---
+    // const preferredSubtitleLanguageLoadedRef = useRef(null); // Stores the loaded preference string or null
+    // const initialSubtitlePreferenceAppliedRef = useRef(false); // Tracks if auto-apply has been attempted
+    // --- End Subtitle Preference Refs ---
   // Effect to manage screen orientation when episodes modal is shown/hidden
   useEffect(() => {
     const handleOrientationChange = async (event) => {
@@ -153,19 +189,38 @@ const VideoPlayerScreen = ({ route }) => {
 
   const getStreamHeaders = useCallback(() => {
     const headers = {
-      'Origin': 'https://vidsrc.su', // Keep a default origin
       'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       'Accept': '*/*'
     };
+    // Determine Origin and Referer based on the videoUrl or streamReferer
+    let originToUse = 'https://vidsrc.su'; // Default
+    let refererToUse = 'https://vidsrc.su/'; // Default
+
     if (streamReferer) {
-      headers['Referer'] = streamReferer;
-    } else {
-      // Fallback if streamReferer is null or undefined
-      headers['Referer'] = 'https://vidsrc.su/';
+      try {
+        const url = new URL(streamReferer);
+        refererToUse = `${url.protocol}//${url.hostname}/`; // Trimmed URL
+        originToUse = url.origin;
+      } catch (e) {
+        // Fallback if streamReferer is not a valid URL
+        refererToUse = streamReferer; // Use as is
+        try {
+          originToUse = new URL(streamReferer).origin;
+        } catch (e2) { /* keep default origin if streamReferer is invalid */ }
+      }
+    } else if (videoUrl) {
+      try {
+        const videoUrlObj = new URL(videoUrl);
+        originToUse = videoUrlObj.origin;
+        refererToUse = videoUrlObj.origin + '/'; // Common practice for referer
+      } catch (e) { /* ignore if videoUrl is not a valid URL */ }
     }
-    // console.log('[VideoPlayerScreen] getStreamHeaders returning:', JSON.stringify(headers));
+
+    headers['Origin'] = originToUse;
+    headers['Referer'] = refererToUse;
+
     return headers;
-  }, [streamReferer]); // Depend on streamReferer
+  }, [streamReferer, videoUrl]); // Depend on streamReferer and videoUrl
 
   const player = useVideoPlayer({
     headers: getStreamHeaders(), // Will be updated when streamReferer changes
@@ -177,13 +232,16 @@ const VideoPlayerScreen = ({ route }) => {
 
   useEffect(() => {
     if (player && videoUrl) {
+      // if (subtitlesEnabled) {
+      //   player.timeUpdateEventInterval = 1; // More frequent updates for subtitles
+      // } else
       if (showControls) {
-        player.timeUpdateEventInterval = 1;
+        player.timeUpdateEventInterval = 1; // Frequent updates when controls are shown
       } else {
-        player.timeUpdateEventInterval = 1000;
+        player.timeUpdateEventInterval = 1000; // Less frequent when controls hidden and no subs
       }
     }
-  }, [player, videoUrl, showControls]);
+  }, [player, videoUrl, showControls]); // Removed subtitlesEnabled
 
   const contentId = mediaType === 'tv'
     ? `tv-${mediaId}-s${season}-e${episode}`
@@ -362,168 +420,265 @@ const VideoPlayerScreen = ({ route }) => {
   }, [navigation, player, handleGoBack]);
 
   useEffect(() => {
-    if (duration > 0 && position > 0 && (duration - position) < VIDEO_END_THRESHOLD_SECONDS) {
+    // Fetch next episode data if within the 2-minute window and data isn't already fetched
+    if (duration > 0 && position > 0 && (duration - position) < TWO_MINUTE_THRESHOLD_SECONDS) {
       if (!isFindingNextEpisode && !showNextEpisodeButton) {
-        findNextEpisode();
+        findNextEpisode(); // This sets showNextEpisodeButton to true when data is ready
       }
     }
   }, [position, duration, findNextEpisode, isFindingNextEpisode, showNextEpisodeButton]);
 
 
-  // --- Subtitle Logic ---
-  const findSubtitles = useCallback(async () => {
-    if (!mediaId || loadingSubtitles) return;
-    setLoadingSubtitles(true);
-    setAvailableLanguages({});
-    try {
-      const results = await searchSubtitles(
-        mediaId,
-        'en',
-        mediaType === 'tv' ? season : undefined,
-        mediaType === 'tv' ? episode : undefined
-      );
-      const languages = {};
-      results.forEach(sub => {
-        const attr = sub.attributes;
-        if (!attr || !attr.language || !attr.files || attr.files.length === 0) {
-          return;
-        }
-        const lang = attr.language;
-        const fileInfo = attr.files[0];
-        const currentSub = {
-          language: lang,
-          file_id: fileInfo.file_id,
-          release_name: attr.release,
-          download_count: attr.download_count || 0,
-          fps: attr.fps || -1
-        };
-        if (!languages[lang] || currentSub.download_count > languages[lang].download_count) {
-          languages[lang] = currentSub;
-        }
-      });
-      setAvailableLanguages(languages);
-    } catch (err) {
-      console.error("Error searching subtitles:", err);
-    } finally {
-      setLoadingSubtitles(false);
-    }
-  }, [mediaId, mediaType, season, episode, loadingSubtitles]);
-
-  const selectSubtitle = useCallback(async (langCode) => {
-    setShowSubtitleSelection(false);
-    if (!langCode) {
-      setParsedSubtitles([]);
-      setSelectedLanguage(null);
-      setCurrentSubtitleText('');
-      setSubtitlesEnabled(false);
-      return;
-    }
-    if (langCode === selectedLanguage) {
-      setSubtitlesEnabled(true);
-      return;
-    }
-    const bestSubtitleInfo = availableLanguages[langCode];
-    if (!bestSubtitleInfo || !bestSubtitleInfo.file_id) {
-      console.error(`Error: No valid subtitle file_id found for language: ${langCode}`);
-      setLoadingSubtitles(false);
-      return;
-    }
-    setLoadingSubtitles(true);
-    setSelectedLanguage(langCode);
-    setParsedSubtitles([]);
-    setCurrentSubtitleText('');
-    try {
-      const srtContent = await downloadSubtitle(bestSubtitleInfo.file_id);
-      if (srtContent) {
-        const parsed = parseSrt(srtContent);
-        const parsedWithSeconds = parsed.map(line => ({
-          ...line,
-          startSeconds: timeToSeconds(line.start),
-          endSeconds: timeToSeconds(line.end),
-        }));
-        setParsedSubtitles(parsedWithSeconds);
-        setSubtitlesEnabled(true);
-      } else {
-        console.warn("Failed to download subtitle content.");
-        setSelectedLanguage(null);
-        setSubtitlesEnabled(false);
-      }
-    } catch (err) {
-      console.error("Error during subtitle download or parsing:", err);
-      setSelectedLanguage(null);
-      setSubtitlesEnabled(false);
-    } finally {
-      setLoadingSubtitles(false);
-    }
-  }, [selectedLanguage, availableLanguages]);
-
-  // Helper to convert SRT time format (00:00:00,000) to seconds
-  const timeToSeconds = (timeInput) => {
-    // Check if input is already a number (assume seconds)
-    if (typeof timeInput === 'number' && !isNaN(timeInput)) {
-      return timeInput;
-    }
-
-    if (typeof timeInput !== 'string' || !timeInput) {
-      return 0;
-    }
-
-    // Proceed with parsing if it's a string
-    try {
-      const timeString = timeInput; // Rename for clarity within this block
-      const parts = timeString.split(':');
-      if (parts.length !== 3) throw new Error('Invalid time format (parts)');
-      const secondsAndMs = parts[2].split(',');
-      if (secondsAndMs.length !== 2) throw new Error('Invalid time format (ms)');
-      const hours = parseInt(parts[0], 10);
-      const minutes = parseInt(parts[1], 10);
-      const seconds = parseInt(secondsAndMs[0], 10);
-      const milliseconds = parseInt(secondsAndMs[1], 10);
-      if (isNaN(hours) || isNaN(minutes) || isNaN(seconds) || isNaN(milliseconds)) {
-        throw new Error('Invalid number parsed from string parts');
-      }
-      return hours * 3600 + minutes * 60 + seconds + milliseconds / 1000;
-    } catch (e) {
-      console.error(`Error parsing time string "${timeInput}":`, e);
-      return 0;
-    }
-  };
-
-  const updateCurrentSubtitle = useCallback((currentPositionSeconds) => {
-    if (!subtitlesEnabled || parsedSubtitles.length === 0) {
-      if (currentSubtitleText !== '') setCurrentSubtitleText('');
-      return;
-    }
-
-    const currentSub = parsedSubtitles.find(
-      line => currentPositionSeconds >= line.startSeconds && currentPositionSeconds <= line.endSeconds
-    );
-
-    let newText = currentSub ? currentSub.text : '';
-
-    // Clean HTML tags from the subtitle text
-    if (newText) {
-      // Replace <br> tags with newline characters
-      newText = newText.replace(/<br\s*\/?>/gi, '\n');
-      // Remove other common HTML tags (i, b, u, font)
-      newText = newText.replace(/<\/?(i|b|u|font)[^>]*>/gi, '');
-      // Trim whitespace
-      newText = newText.trim();
-    }
-
-    if (newText !== currentSubtitleText) {
-      setCurrentSubtitleText(newText);
-    }
-  }, [subtitlesEnabled, parsedSubtitles, currentSubtitleText]);
-
-  const toggleSubtitles = () => {
-    setSubtitlesEnabled(prev => !prev);
-    setShowControls(true); // Keep controls visible
-  };
-
-
-  // --- End Subtitle Logic ---
-
+  
+    // --- Subtitle Logic ---
+    // const findSubtitles = useCallback(async () => {
+    //   if (!mediaId || loadingSubtitles) return;
+    //   setLoadingSubtitles(true);
+    //   setAvailableLanguages({}); // Clear previous results
+      
+    //   // TODO: Get preferred languages from settings/storage in the future
+    //   const preferredLanguages = ['en', 'es', 'pt', 'fr', 'de', 'it', 'ja', 'ko', 'zh']; // Example list
+    //   const languageQueryString = preferredLanguages.join(',');
+  
+    //   try {
+    //     const results = await searchSubtitles(
+    //       mediaId,
+    //       languageQueryString, // Pass comma-separated list of preferred languages
+    //       mediaType === 'tv' ? season : undefined,
+    //       mediaType === 'tv' ? episode : undefined
+    //     );
+        
+    //     const bestSubtitlesByLang = {};
+    //     results.forEach(sub => {
+    //       const attr = sub.attributes;
+    //       if (!attr || !attr.language || !attr.files || attr.files.length === 0) {
+    //         return;
+    //       }
+  
+    //       // Filter out "foreign parts only" subtitles
+    //       if (attr.foreign_parts_only === true) {
+    //         return;
+    //       }
+          
+    //       const langCode = attr.language;
+    //       const fileInfo = attr.files[0]; // Assuming the first file is the relevant one (e.g., SRT)
+  
+    //       const currentSubInfo = {
+    //         language: langCode,
+    //         languageName: getLanguageName(langCode),
+    //         fileId: fileInfo.file_id,
+    //         releaseName: attr.release,
+    //         downloadCount: attr.download_count || 0,
+    //         fps: attr.fps || -1,
+    //         uploaderName: attr.uploader?.name,
+    //         uploadDate: attr.upload_date,
+    //         legacySubtitleId: attr.legacy_subtitle_id,
+    //         // Attributes for selection logic
+    //         moviehashMatch: attr.moviehash_match === true,
+    //         fromTrusted: attr.from_trusted === true,
+    //         hearingImpaired: attr.hearing_impaired === true,
+    //         // ratings: attr.ratings || 0, // Could also use ratings or votes
+    //       };
+  
+    //       const existingBest = bestSubtitlesByLang[langCode];
+  
+    //       if (!existingBest) {
+    //         bestSubtitlesByLang[langCode] = currentSubInfo;
+    //       } else {
+    //         let newIsBetter = false;
+    //         // Rule 1: Prefer moviehash_match: true
+    //         if (currentSubInfo.moviehashMatch && !existingBest.moviehashMatch) {
+    //           newIsBetter = true;
+    //         } else if (!currentSubInfo.moviehashMatch && existingBest.moviehashMatch) {
+    //           newIsBetter = false;
+    //         } else { // Same moviehash_match status (both true or both false)
+    //           // Rule 2: Prefer from_trusted: true
+    //           if (currentSubInfo.fromTrusted && !existingBest.fromTrusted) {
+    //             newIsBetter = true;
+    //           } else if (!currentSubInfo.fromTrusted && existingBest.fromTrusted) {
+    //             newIsBetter = false;
+    //           } else { // Same from_trusted status
+    //             // Rule 3: Prefer hearing_impaired: false
+    //             if (!currentSubInfo.hearingImpaired && existingBest.hearingImpaired) {
+    //               newIsBetter = true;
+    //             } else if (currentSubInfo.hearingImpaired && !existingBest.hearingImpaired) {
+    //               newIsBetter = false;
+    //             } else { // Same hearing_impaired status
+    //               // Rule 4: Higher download_count is better
+    //               if (currentSubInfo.downloadCount > existingBest.downloadCount) {
+    //                 newIsBetter = true;
+    //               }
+    //               // As a very final tie-breaker, could consider ratings or votes if download counts are equal
+    //               // else if (currentSubInfo.downloadCount === existingBest.downloadCount && currentSubInfo.ratings > existingBest.ratings) {
+    //               //   newIsBetter = true;
+    //               // }
+    //             }
+    //           }
+    //         }
+  
+    //         if (newIsBetter) {
+    //           bestSubtitlesByLang[langCode] = currentSubInfo;
+    //         }
+    //       }
+    //     });
+        
+    //     setAvailableLanguages(bestSubtitlesByLang);
+    //   } catch (err) {
+    //     console.error("Error searching subtitles:", err);
+    //     // Optionally, set an error state for subtitles
+    //   } finally {
+    //     setLoadingSubtitles(false);
+    //   }
+    // }, [mediaId, mediaType, season, episode, loadingSubtitles]);
+  
+    // const selectSubtitle = useCallback(async (langCode) => {
+    //   setSubtitleOffset(0); // Reset offset on new selection or turning off
+    //   // setShowSubtitlesModal(false); // REMOVE THIS LINE - Modal closure handled by caller
+    //   if (!langCode) {
+    //     setParsedSubtitles([]);
+    //     setSelectedLanguage(null);
+    //     setCurrentSubtitleText('');
+    //     setSubtitlesEnabled(false);
+    //     // saveLastSelectedSubtitleLanguage(null);
+    //     // saveSubtitlesEnabledState(false); // Persist enabled state
+    //     return;
+    //   }
+  
+    //   if (langCode === selectedLanguage) {
+    //     setSubtitlesEnabled(true);
+    //     // saveSubtitlesEnabledState(true); // Ensure it's persisted if toggled on
+    //     return;
+    //   }
+  
+    //   const bestSubtitleInfo = availableLanguages[langCode];
+    //   if (!bestSubtitleInfo || !bestSubtitleInfo.fileId) {
+    //     console.error(`Error: No valid subtitle fileId found for language: ${langCode}`);
+    //     setLoadingSubtitles(false);
+    //     return;
+    //   }
+  
+    //   setLoadingSubtitles(true);
+    //   setSelectedLanguage(langCode);
+    //   setParsedSubtitles([]);
+    //   setCurrentSubtitleText('');
+  
+    //   try {
+    //     const srtContent = await downloadSubtitle(bestSubtitleInfo.fileId);
+    //     if (srtContent) {
+    //       const parsed = parseSrt(srtContent);
+    //       const parsedWithSeconds = parsed.map(line => ({
+    //         ...line,
+    //         startSeconds: timeToSeconds(line.start),
+    //         endSeconds: timeToSeconds(line.end),
+    //       }));
+    //       setParsedSubtitles(parsedWithSeconds);
+    //       setSubtitlesEnabled(true);
+    //       // saveLastSelectedSubtitleLanguage(langCode);
+    //       // saveSubtitlesEnabledState(true); // Persist enabled state
+    //     } else {
+    //       console.warn("Failed to download subtitle content.");
+    //       setSelectedLanguage(null);
+    //       setSubtitlesEnabled(false);
+    //       // saveLastSelectedSubtitleLanguage(null);
+    //       // saveSubtitlesEnabledState(false); // Persist enabled state
+    //     }
+    //   } catch (err) {
+    //     console.error("Error during subtitle download or parsing:", err);
+    //     setSelectedLanguage(null);
+    //     setSubtitlesEnabled(false);
+    //     // saveLastSelectedSubtitleLanguage(null);
+    //     // saveSubtitlesEnabledState(false); // Persist enabled state
+    //   } finally {
+    //     setLoadingSubtitles(false);
+    //   }
+    // }, [selectedLanguage, availableLanguages]); // saveLastSelectedSubtitleLanguage, saveSubtitlesEnabledState
+  
+    // Helper to convert SRT time format (00:00:00,000) to seconds
+    // const timeToSeconds = (timeInput) => {
+    //   // Check if input is already a number (assume seconds)
+    //   if (typeof timeInput === 'number' && !isNaN(timeInput)) {
+    //     return timeInput;
+    //   }
+  
+    //   if (typeof timeInput !== 'string' || !timeInput) {
+    //     return 0;
+    //   }
+  
+    //   // Proceed with parsing if it's a string
+    //   try {
+    //     const timeString = timeInput; // Rename for clarity within this block
+    //     const parts = timeString.split(':');
+    //     if (parts.length !== 3) throw new Error('Invalid time format (parts)');
+    //     const secondsAndMs = parts[2].split(',');
+    //     if (secondsAndMs.length !== 2) throw new Error('Invalid time format (ms)');
+    //     const hours = parseInt(parts[0], 10);
+    //     const minutes = parseInt(parts[1], 10);
+    //     const seconds = parseInt(secondsAndMs[0], 10);
+    //     const milliseconds = parseInt(secondsAndMs[1], 10);
+    //     if (isNaN(hours) || isNaN(minutes) || isNaN(seconds) || isNaN(milliseconds)) {
+    //       throw new Error('Invalid number parsed from string parts');
+    //     }
+    //     return hours * 3600 + minutes * 60 + seconds + milliseconds / 1000;
+    //   } catch (e) {
+    //     console.error(`Error parsing time string "${timeInput}":`, e);
+    //     return 0;
+    //   }
+    // };
+  
+    // const updateCurrentSubtitle = useCallback((currentPositionSeconds) => {
+    //   if (!subtitlesEnabled || parsedSubtitles.length === 0) {
+    //     if (currentSubtitleText !== '') setCurrentSubtitleText('');
+    //     return;
+    //   }
+  
+    //   const adjustedPositionSeconds = currentPositionSeconds + (subtitleOffset / 1000); // Apply offset
+  
+    //   const currentSub = parsedSubtitles.find(
+    //     line => adjustedPositionSeconds >= line.startSeconds && adjustedPositionSeconds <= line.endSeconds
+    //   );
+  
+    //   let newText = currentSub ? currentSub.text : '';
+  
+    //   // Clean HTML tags from the subtitle text
+    //   if (newText) {
+    //     // Replace <br> tags with newline characters
+    //     newText = newText.replace(/<br\s*\/?>/gi, '\n');
+    //     // Remove other common HTML tags (i, b, u, font)
+    //     newText = newText.replace(/<\/?(i|b|u|font)[^>]*>/gi, '');
+    //     // Trim whitespace
+    //     newText = newText.trim();
+    //   }
+  
+    //   if (newText !== currentSubtitleText) {
+    //     setCurrentSubtitleText(newText);
+    //   }
+    // }, [subtitlesEnabled, parsedSubtitles, currentSubtitleText, subtitleOffset]); // Add subtitleOffset
+  
+  // const SUBTITLE_OFFSET_INCREMENT_MS = 250; // 250ms increment
+  
+  // const adjustSubtitleOffset = (amountMs) => {
+  //   setSubtitleOffset(prevOffset => {
+  //     const newOffset = prevOffset + amountMs;
+  //     // Optional: Clamp the offset to a reasonable range, e.g., -30s to +30s
+  //     // return Math.max(-30000, Math.min(30000, newOffset));
+  //     return newOffset;
+  //   });
+  //   setShowControls(true); // Keep controls visible and reset timer
+  // };
+  
+  // const toggleSubtitles = () => {
+  //   const newEnabledState = !subtitlesEnabled;
+  //   setSubtitlesEnabled(newEnabledState);
+  //   // saveSubtitlesEnabledState(newEnabledState); // Persist the toggled state
+  //   if (!newEnabledState) { // If turning subtitles OFF
+  //     setSubtitleOffset(0); // Reset offset
+  //   }
+  //   setShowControls(true); // Keep controls visible
+  // };
+  
+  
+  
+    // --- End Subtitle Logic ---
   // --- Episodes Viewer Modal Logic ---
   const toggleEpisodesModal = async () => {
     if (!showEpisodesModal) {
@@ -618,6 +773,41 @@ const VideoPlayerScreen = ({ route }) => {
   };
   // --- End Episodes Viewer Modal Logic ---
 
+  
+    // --- Subtitles Modal Logic ---
+    // const toggleSubtitlesModal = async () => {
+    //   if (!showSubtitlesModal) {
+    //     if (player && isPlaying) {
+    //       try {
+    //         player.pause();
+    //       } catch (e) {
+    //         console.error("Error pausing video on subtitles modal open:", e);
+    //       }
+    //     }
+    //     try {
+    //       // Ensure landscape orientation for the modal
+    //       await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
+    //       await new Promise(resolve => setTimeout(resolve, 100)); // Small delay
+    //     } catch (e) {
+    //       console.error("Failed to lock orientation for subtitles modal:", e);
+    //     }
+    //     // Fetch available subtitle languages if not already fetched or if they might be stale
+    //     // if (Object.keys(availableLanguages).length === 0) { // Simple check for now
+    //     //   findSubtitles();
+    //     // }
+    //     setShowSubtitlesModal(true);
+    //   } else {
+    //     setShowSubtitlesModal(false);
+    //     try {
+    //       // Re-lock to landscape if it was changed by something else
+    //       await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
+    //     } catch (e) {
+    //       console.error("Failed to re-lock to LANDSCAPE on subtitles modal close:", e);
+    //     }
+    //   }
+    //   setShowControls(true); // Keep controls visible and reset timer
+    // };
+    // --- End Subtitles Modal Logic ---
   // --- Listener Handlers ---
   const lastSaveTimeRef = useRef(0);
 
@@ -666,7 +856,7 @@ const VideoPlayerScreen = ({ route }) => {
       saveProgress(currentEventTime);
       lastSaveTimeRef.current = now;
     }
-    updateCurrentSubtitle(currentEventTime);
+    // updateCurrentSubtitle(currentEventTime);
   };
 
   const handleDurationChange = (dur) => {
@@ -877,6 +1067,13 @@ const VideoPlayerScreen = ({ route }) => {
     let isMounted = true;
     setIsUnmounting(false);
 
+    
+        // Reset subtitle states for new media
+        // setAvailableLanguages({});
+        // setSelectedLanguage(null);
+        // setParsedSubtitles([]);
+        // setCurrentSubtitleText('');
+        // // initialSubtitlePreferenceAppliedRef is reset in initializePlayer
     const setOrientationAndHideUI = async () => {
       try {
         await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
@@ -903,67 +1100,96 @@ const VideoPlayerScreen = ({ route }) => {
     };
 
     const setupStreamExtraction = () => {
-      // ... (keep existing stream extraction setup) ...
-      const config = extractM3U8Stream(
+      if (!isMounted) return;
+      setCurrentAttemptingSource(null); // Reset before starting
+
+      extractM3U8Stream(
         mediaId, mediaType, season, episode,
-        (streamUrl, referer) => { // Modified to accept referer
-          // console.log(`[VideoPlayerScreen] onStreamFound called. URL: ${streamUrl}, Referer: ${referer}`);
-          if (!isMounted || streamExtractionComplete || (videoUrl && streamReferer === referer)) {
-            // console.log('[VideoPlayerScreen] onStreamFound: Bailing out - already processed or not mounted.');
+        // onStreamFound: (url, referer, sourceName) => void
+        (streamUrl, referer, sourceName) => {
+          if (!isMounted || streamExtractionComplete) {
             return;
           }
           const processedUrl = Platform.OS === 'ios' ? streamUrl.replace('http://', 'https://') : streamUrl;
-          // console.log(`[VideoPlayerScreen] Saving stream to cache. Content ID: ${contentId}, URL: ${processedUrl}, Referer: ${referer}`);
-          saveStreamUrl(contentId, processedUrl, referer); // Save referer along with URL
+          saveStreamUrl(contentId, processedUrl, referer, sourceName); // Save referer and sourceName
           setVideoUrl(processedUrl);
-          setStreamReferer(referer); // Set the referer state
+          setStreamReferer(referer);
+          setCurrentPlayingSourceName(sourceName);
           setStreamExtractionComplete(true);
           setManualWebViewVisible(false);
           setCaptchaUrl(null);
+          setCurrentWebViewConfig(null); // Clear WebView config as it's no longer needed
+          setCurrentAttemptingSource(null);
         },
-        (err) => {
+        // onSourceError: (error, sourceName) => void
+        (err, sourceName) => {
           if (!isMounted) return;
-          setError({ message: `Could not extract video stream: ${err.message}` });
-          setStreamExtractionComplete(true);
+          console.warn(`[VideoPlayerScreen] Error from source ${sourceName}: ${err.message}`);
+          // extractM3U8Stream handles trying the next source.
+          // We could update UI to show "Failed with source X, trying Y..."
+          // For now, just log it. The final error will be handled by onAllSourcesFailed.
+        },
+        // onAllSourcesFailed: (finalError) => void
+        (finalError) => {
+          if (!isMounted) return;
+          setError({ message: `All sources failed: ${finalError.message}` });
+          setStreamExtractionComplete(true); // Mark as complete to stop further attempts
           setLoading(false);
           setIsInitialLoading(false);
           setManualWebViewVisible(false);
           setCaptchaUrl(null);
+          setCurrentWebViewConfig(null);
+          setCurrentAttemptingSource(null);
         },
-        (urlForCaptcha) => { // onManualInterventionRequired
+        // onManualInterventionRequired: (manualUrl, sourceName) => void
+        (urlForCaptcha, sourceName) => {
           if (!isMounted) return;
           setCaptchaUrl(urlForCaptcha);
           setManualWebViewVisible(true);
+          // The currentWebViewConfig should already be set by provideWebViewConfigForAttempt
+          // for this source.
+        },
+        // provideWebViewConfigForAttempt: (webViewConfig, sourceName, attemptKey) => void
+        (configForAttempt, sourceName, key) => {
+          if (!isMounted) return;
+          setCurrentAttemptingSource(sourceName);
+          setCurrentWebViewConfig(configForAttempt);
+          setCurrentSourceAttemptKey(key);
+          setManualWebViewVisible(false); // Hide manual view if a new attempt starts
+          setCaptchaUrl(null);
         }
       );
-      setWebViewConfig(config);
     };
 
     const initializePlayer = async () => {
-      await setOrientationAndHideUI(); // Set orientation and hide UI first
+      await setOrientationAndHideUI();
       await checkSavedProgress();
 
-      // Fetch auto-play setting
-      const isEnabled = await getAutoPlaySetting();
-      if (isMounted) {
-        setAutoPlayEnabled(isEnabled);
-      }
+      const isAutoPlayEnabled = await getAutoPlaySetting();
+      if (isMounted) setAutoPlayEnabled(isAutoPlayEnabled);
 
-      // Check cache
-      const cachedStreamData = await getCachedStreamUrl(contentId); // Returns { url, referer } or null
-      // console.log(`[VideoPlayerScreen] Checked cache for ${contentId}. Found:`, cachedStreamData);
+      // // Load subtitle preference & enabled state
+      // const prefLang = await getLastSelectedSubtitleLanguage();
+      // const initialSubtitlesEnabled = await getSubtitlesEnabledState();
+      // if (isMounted) {
+      //   preferredSubtitleLanguageLoadedRef.current = prefLang;
+      //   setSubtitlesEnabled(initialSubtitlesEnabled); // Set initial enabled state from storage
+      //   initialSubtitlePreferenceAppliedRef.current = false; // Reset for current media
+      // }
+
+      const cachedStreamData = await getCachedStreamUrl(contentId);
       if (cachedStreamData && cachedStreamData.url && isMounted) {
-        // console.log(`[VideoPlayerScreen] Using cached stream. URL: ${cachedStreamData.url}, Referer: ${cachedStreamData.referer}`);
         setVideoUrl(cachedStreamData.url);
-        setStreamReferer(cachedStreamData.referer); // Set referer from cache
+        setStreamReferer(cachedStreamData.referer);
+        setCurrentPlayingSourceName(cachedStreamData.sourceName); // Use directly from cached data
         setStreamExtractionComplete(true);
+        // // Since stream is ready, try to find subtitles for auto-application
+        // if (!loadingSubtitles) findSubtitles();
       } else if (isMounted) {
-        // console.log('[VideoPlayerScreen] No valid cached stream found or not mounted. Setting up new stream extraction.');
         setupStreamExtraction();
+        // // For non-cached, findSubtitles will be called by another effect once videoUrl is set,
+        // // or when user opens the modal.
       }
-
-      // Find subtitles after getting media info
-      // findSubtitles();
     };
 
     initializePlayer();
@@ -1001,8 +1227,162 @@ const VideoPlayerScreen = ({ route }) => {
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [navigation, contentId, mediaId, mediaType, season, episode, retryAttempts, player]); // Added player
+  }, [navigation, contentId, mediaId, mediaType, season, episode, retryAttempts, player]); // REMOVED findSubtitles from dependency array
   // --- End Main Setup Effect ---
+  
+  
+  // --- Source Selection Modal Logic ---
+  const openChangeSourceModal = async () => {
+    if (isInitialLoading || !player) return;
+
+    if (player.isPlaying) {
+      try {
+        await player.pause();
+      } catch (e) { console.warn("Error pausing video before opening source modal:", e); }
+    }
+
+    const sources = getActiveStreamSources();
+    setAvailableSourcesList(sources);
+    
+    const initialStatus = {};
+    sources.forEach(s => { initialStatus[s.name] = 'idle'; });
+    setSourceAttemptStatus(initialStatus);
+
+    setShowSourceSelectionModal(true);
+    setShowControls(true); // Keep controls visible when modal is open
+  };
+
+  const handleSelectSourceFromModal = async (selectedSourceInfo) => {
+    if (isChangingSource || !player) return; // Prevent multiple concurrent attempts from modal
+
+    setIsChangingSource(true); // Indicates an attempt from the modal is active
+    setSourceAttemptStatus(prev => ({ ...prev, [selectedSourceInfo.name]: 'loading' }));
+
+    const currentPositionToResume = player.currentTime || position || 0;
+
+    if (player.isPlaying) {
+      try {
+        await player.pause();
+      } catch (e) { console.warn("Error pausing video on source select:", e); }
+    }
+
+    if (contentId) {
+      await clearSpecificStreamFromCache(contentId);
+    }
+
+    setError(null);
+    setStreamExtractionComplete(false); // New attempt, so not complete yet
+    setCurrentWebViewConfig(null);
+    setCurrentSourceAttemptKey(`specific-source-${selectedSourceInfo.name}-${Date.now()}`);
+    setCurrentAttemptingSource(selectedSourceInfo.name); // For loading text if needed
+    setManualWebViewVisible(false);
+    setCaptchaUrl(null);
+
+    const onStreamFound = (streamUrl, referer, sourceName) => {
+      if (isUnmounting) {
+        setIsChangingSource(false);
+        setSourceAttemptStatus(prev => ({ ...prev, [sourceName]: 'failed' })); // Or 'idle' if unmounted
+        return;
+      }
+
+      const processedUrl = Platform.OS === 'ios' ? streamUrl.replace('http://', 'https://') : streamUrl;
+      saveStreamUrl(contentId, processedUrl, referer, sourceName);
+      
+      setStreamReferer(referer);
+      setCurrentPlayingSourceName(sourceName);
+      setResumeTime(currentPositionToResume);
+      setVideoUrl(processedUrl); // This triggers the useEffect to replace source and play
+
+      setStreamExtractionComplete(true);
+      setManualWebViewVisible(false);
+      setCaptchaUrl(null);
+      setCurrentWebViewConfig(null);
+      setCurrentAttemptingSource(null);
+      setError(null);
+      setSourceAttemptStatus(prev => ({ ...prev, [sourceName]: 'success' }));
+      setIsChangingSource(false);
+      setShowSourceSelectionModal(false); // Close modal on success
+    };
+
+    const onSourceErrorCallback = (err, sourceName) => {
+      if (isUnmounting) {
+        setIsChangingSource(false);
+        return;
+      }
+      console.warn(`[VideoPlayerScreen] SpecificSource: Error from source ${sourceName}: ${err.message}`);
+      setSourceAttemptStatus(prev => ({ ...prev, [sourceName]: 'failed' }));
+      // Do not set global error, modal shows item-specific error
+      // If it was a CAPTCHA that failed, hide the webview
+      if (manualWebViewVisible) {
+        setManualWebViewVisible(false);
+        setCaptchaUrl(null);
+      }
+      setCurrentWebViewConfig(null); // Clear config for this failed attempt
+      setCurrentAttemptingSource(null);
+      setIsChangingSource(false); // Allow another selection
+      // Keep modal open
+    };
+
+    const provideWebViewConfigForAttempt = (configForAttempt, sourceName, key) => {
+      if (isUnmounting) {
+        setIsChangingSource(false);
+        return;
+      }
+      setCurrentAttemptingSource(sourceName); // This might be shown if modal is closed during CAPTCHA
+      setCurrentWebViewConfig(configForAttempt);
+      setCurrentSourceAttemptKey(key);
+      setManualWebViewVisible(false);
+      setCaptchaUrl(null);
+    };
+    
+    const onManualInterventionRequired = (urlForCaptcha, sourceName) => {
+      if (isUnmounting) {
+        setIsChangingSource(false);
+        return;
+      }
+      setCaptchaUrl(urlForCaptcha);
+      setManualWebViewVisible(true); // Show the main screen's WebView for CAPTCHA
+      // Keep sourceAttemptStatus as 'loading' for this source in the modal
+      // Modal might be closed by user, or remain open. CAPTCHA webview is on main screen.
+      // setIsChangingSource remains true
+    };
+
+    extractStreamFromSpecificSource(
+      selectedSourceInfo,
+      mediaId, mediaType, season, episode,
+      onStreamFound,
+      onSourceErrorCallback, // Use the renamed callback
+      onManualInterventionRequired,
+      provideWebViewConfigForAttempt
+    );
+  };
+  // --- End Source Selection Modal Logic ---
+  // Effect to call findSubtitles when a non-cached stream becomes ready,
+  // to facilitate auto-application of subtitle preference.
+  // useEffect(() => {
+  //   if (videoUrl && streamExtractionComplete &&
+  //       Object.keys(availableLanguages).length === 0 &&
+  //       !loadingSubtitles && !initialSubtitlePreferenceAppliedRef.current) {
+  //     // If video is ready from extraction (not cache), and we haven't fetched subs yet,
+  //     // and haven't tried applying preference (which implies subs weren't fetched for it).
+  //     // findSubtitles();
+  //   }
+  // }, [videoUrl, streamExtractionComplete, availableLanguages, loadingSubtitles]); // findSubtitles
+
+  // // Effect to apply loaded subtitle preference once languages are available
+  // useEffect(() => {
+  //   const prefLang = preferredSubtitleLanguageLoadedRef.current;
+
+  //   if (player && Object.keys(availableLanguages).length > 0 && !initialSubtitlePreferenceAppliedRef.current) {
+  //     if (prefLang !== null && availableLanguages[prefLang]) {
+  //       // selectSubtitle(prefLang); // This will also save the preference again, which is fine.
+  //     } else if (prefLang === null) {
+  //       // selectSubtitle(null); // Ensure "None" is selected if that's the preference
+  //     }
+  //     // Mark as attempted regardless of success to prevent re-application for this media load
+  //     initialSubtitlePreferenceAppliedRef.current = true;
+  //   }
+  // }, [availableLanguages, player]); // selectSubtitle
 
   // --- Corrective Effect for Stuck Buffering Spinner ---
   useEffect(() => {
@@ -1141,7 +1521,9 @@ const VideoPlayerScreen = ({ route }) => {
     setIsInitialLoading(true);
     setStreamExtractionComplete(false);
     setVideoUrl(null);
-    setWebViewConfig(null);
+    setCurrentWebViewConfig(null); // Reset current WebView config
+    setCurrentSourceAttemptKey(`reload-${Date.now()}`); // New key for WebView
+    setCurrentAttemptingSource(null);
     setManualWebViewVisible(false); // Reset CAPTCHA view on reload
     setCaptchaUrl(null);
     setResumeTime(0);
@@ -1379,50 +1761,7 @@ const VideoPlayerScreen = ({ route }) => {
 
   // --- Render ---
 
-  const renderSubtitleSelectionModal = () => (
-    <Modal
-      animationType="slide"
-      transparent={true}
-      visible={showSubtitleSelection}
-      onRequestClose={async () => {
-        setShowSubtitleSelection(false);
-        try {
-          await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
-        } catch (e) {
-          console.error("Failed to re-lock orientation after subtitle modal close:", e);
-        }
-      }}
-    >
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalContent}>
-          <Text style={styles.modalTitle}>Select Subtitles</Text>
-          {loadingSubtitles && <ActivityIndicator color="#fff" style={{ marginVertical: 10 }} />}
-          <FlatList
-            data={['None', ...Object.keys(availableLanguages).sort()]} // Add "None" option and sort languages
-            keyExtractor={(item) => item}
-            renderItem={({ item: langCode }) => (
-              <TouchableOpacity
-                style={[
-                  styles.subtitleOption,
-                  // Highlight if this language is selected OR if 'None' is selected and item is 'None'
-                  (selectedLanguage === langCode || (selectedLanguage === null && langCode === 'None')) && styles.subtitleOptionSelected
-                ]}
-                onPress={() => selectSubtitle(langCode === 'None' ? null : langCode)} // Pass null for "None"
-              >
-                <Text style={styles.subtitleOptionText}>
-                  {langCode}
-                </Text>
-              </TouchableOpacity>
-            )}
-            ListEmptyComponent={() => !loadingSubtitles && <Text style={styles.noSubtitlesText}>No subtitle languages found.</Text>}
-          />
-          <TouchableOpacity style={styles.closeButton} onPress={() => setShowSubtitleSelection(false)}>
-            <Text style={styles.closeButtonText}>Close</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    </Modal>
-  );
+// const renderSubtitleSelectionModal = () => ( ... ); // Removed entire function
 
 const renderEpisodesModal = () => {
   if (mediaType !== 'tv') return null;
@@ -1583,15 +1922,44 @@ const renderEpisodesModal = () => {
 };
 
   const renderNextEpisodeButton = () => {
-    if (!showNextEpisodeButton) return null;
+    // If findNextEpisode hasn't completed (i.e., data isn't ready), don't show anything.
+    // showNextEpisodeButton (state) is true if next episode data is fetched/determined.
+    if (!showNextEpisodeButton) {
+      return null;
+    }
+
+    const timeLeft = duration - position;
+
+    const isWithinFortyFiveSecondWindow = duration > 0 && timeLeft < VIDEO_END_THRESHOLD_SECONDS;
+    const isWithinTwoMinuteWindowButNotFortyFive = duration > 0 &&
+                                               timeLeft < TWO_MINUTE_THRESHOLD_SECONDS &&
+                                               timeLeft >= VIDEO_END_THRESHOLD_SECONDS;
+
+    // Determine if the button should be rendered at all based on time windows and data readiness
+    if (!showNextEpisodeButton || (!isWithinFortyFiveSecondWindow && !isWithinTwoMinuteWindowButNotFortyFive)) {
+      return null; // Not in any relevant time window or data not ready
+    }
 
     const nextDetails = nextEpisodeDetailsRef.current;
     const buttonText = nextDetails
       ? `Next: S${nextDetails.season} E${nextDetails.episode}`
       : "Back to Home";
 
+    let buttonOpacityStyle;
+    if (isWithinFortyFiveSecondWindow) {
+      // Always visible and fully opaque if < 45s
+      buttonOpacityStyle = { opacity: 1 };
+    } else if (isWithinTwoMinuteWindowButNotFortyFive) {
+      // Fades with controls if between 2min and 45s.
+      // opacityAnim is controlled by the showControls state.
+      // When showControls becomes false, opacityAnim animates to 0.
+      // The button remains mounted (due to being in the time window), allowing the fade-out.
+      buttonOpacityStyle = { opacity: opacityAnim };
+    }
+    // No else needed here, as the initial check handles cases outside relevant windows.
+
     return (
-      <Animated.View style={[styles.nextEpisodeContainer]}>
+      <Animated.View style={[styles.nextEpisodeContainer, buttonOpacityStyle]}>
         <TouchableOpacity style={styles.nextEpisodeButton} onPress={playNextEpisode}>
           <Ionicons name={nextDetails ? "play-skip-forward" : "home"} size={20} color="white" style={styles.nextEpisodeIcon} />
           <Text style={styles.nextEpisodeText}>{buttonText}</Text>
@@ -1605,39 +1973,16 @@ const renderEpisodesModal = () => {
       <View style={styles.container} onLayout={onLayoutRootView}>
         <StatusBar hidden />
 
-      {/* WebView for stream extraction / CAPTCHA */}
-      {webViewConfig && !streamExtractionComplete && (
+      {/* WebView for stream extraction / CAPTCHA - uses currentWebViewConfig */}
+      {currentWebViewConfig && !streamExtractionComplete && (
         <View style={manualWebViewVisible ? styles.visibleWebViewForCaptcha : styles.hiddenWebView}>
           <WebView
-            // Key prop helps to re-mount WebView if URI changes significantly, might help with CAPTCHA state
-            key={manualWebViewVisible ? captchaUrl : 'initial-hidden-webview'}
-            source={manualWebViewVisible && captchaUrl ? { uri: captchaUrl, headers: webViewConfig.source.headers } : webViewConfig.source}
-            injectedJavaScript={webViewConfig.injectedJavaScript}
-            onMessage={webViewConfig.onMessage}
-            // We need to ensure onError and onHttpError from webViewConfig are correctly passed
-            // especially when the CAPTCHA view is active.
-            // The webViewConfig contains the callbacks that eventually call setVideoUrl or setError.
-            // If the user solves the CAPTCHA, the page should navigate, and our injectedJS should find the stream.
-            // The original onMessage should then be triggered.
-            onError={(syntheticEvent) => {
-                // If CAPTCHA view is active, an error here might mean CAPTCHA itself failed to load
-                if (manualWebViewVisible) {
-                } else if (webViewConfig.onError) {
-                    webViewConfig.onError(syntheticEvent);
-                }
-            }}
-            onHttpError={(syntheticEvent) => {
-                // If CAPTCHA view is active, an HTTP error might be part of CAPTCHA flow (e.g. submitting it)
-                // or an issue with the CAPTCHA service.
-                // We generally want the original onHttpError to fire if it's still a 403,
-                // but if it's visible, the user is handling it.
-                // The original onHttpError from streamExtractor is what triggers onManualInterventionRequired.
-                // If it happens *again* while visible, it's a bit of a loop.
-                if (manualWebViewVisible) {
-                } else if (webViewConfig.onHttpError) {
-                    webViewConfig.onHttpError(syntheticEvent);
-                }
-            }}
+            key={currentSourceAttemptKey} // Use the attempt key to force re-mount
+            source={manualWebViewVisible && captchaUrl ? { uri: captchaUrl, headers: currentWebViewConfig.source.headers } : currentWebViewConfig.source}
+            injectedJavaScript={currentWebViewConfig.injectedJavaScript}
+            onMessage={currentWebViewConfig.onMessage}
+            onError={currentWebViewConfig.onError} // Directly use the one from the current config
+            onHttpError={currentWebViewConfig.onHttpError} // Directly use
             javaScriptEnabled={true}
             domStorageEnabled={true}
             allowsInlineMediaPlayback={true}
@@ -1647,7 +1992,7 @@ const renderEpisodesModal = () => {
             incognito={true}
             thirdPartyCookiesEnabled={false}
             onShouldStartLoadWithRequest={() => true}
-            injectedJavaScriptBeforeContentLoaded={injectedJavaScript}
+            injectedJavaScriptBeforeContentLoaded={injectedJavaScript} // General JS, not source-specific
           />
         </View>
       )}
@@ -1662,12 +2007,13 @@ const renderEpisodesModal = () => {
           </SafeAreaView>
           <ActivityIndicator size="large" color="#E50914" />
           <Text style={styles.loadingText}>
-            {manualWebViewVisible ? 'Please click the CAPTCHA checkbox below.' :
-             streamExtractionComplete ? 'Loading video...' : 'Extracting video stream...'}
+            {manualWebViewVisible ? 'Please complete the CAPTCHA below.' :
+             streamExtractionComplete ? 'Loading video...' :
+             currentAttemptingSource ? `Extracting from ${currentAttemptingSource}...` : 'Initializing stream extraction...'}
           </Text>
-          {!streamExtractionComplete && !manualWebViewVisible && (
+          {!streamExtractionComplete && !manualWebViewVisible && currentAttemptingSource && (
             <Text style={styles.loadingSubText}>
-              This may take up to 30 seconds...
+              Trying source: {currentAttemptingSource}. This may take a moment...
             </Text>
           )}
           {manualWebViewVisible && (
@@ -1729,13 +2075,13 @@ const renderEpisodesModal = () => {
         </GestureDetector>
       )}
 
-      {/* Subtitle Text Display */}
-      {subtitlesEnabled && currentSubtitleText ? (
-        <View style={styles.subtitleTextContainer} pointerEvents="none">
-          <Text style={styles.subtitleText}>{currentSubtitleText}</Text>
-        </View>
-      ) : null}
-    
+      
+            {/* Subtitle Text Display */}
+            {/* {subtitlesEnabled && currentSubtitleText ? (
+              <View style={styles.subtitleTextContainer} pointerEvents="none">
+                <Text style={styles.subtitleText}>{currentSubtitleText}</Text>
+              </View>
+            ) : null} */}
           {/* Buffering Indicator */}
           {isBufferingVideo && !isInitialLoading && (
             <View style={styles.bufferingIndicatorContainer}>
@@ -1760,17 +2106,47 @@ const renderEpisodesModal = () => {
                 {title}
                 {mediaType === 'tv' && episodeTitle ? ` - ${episodeTitle}` : ''}
                 {mediaType === 'tv' && (
-                  <Text style={styles.seasonEpisodeText}>{` (S${season}:E${episode})`}</Text> // Added space before (
+                  <Text style={styles.seasonEpisodeText}>{` (S${season}:E${episode})`}</Text>
                 )}
               </Text>
             </View>
             {/* Subtitle Toggle/Selection Buttons */}
             <View style={styles.topRightButtons}>
+              {/* Subtitle Offset Controls - Show only if subtitles are enabled and selected */}
+              {/* {subtitlesEnabled && selectedLanguage && (
+                <>
+                  <TouchableOpacity onPress={() => adjustSubtitleOffset(-SUBTITLE_OFFSET_INCREMENT_MS)} style={styles.controlButton}>
+                    <Ionicons name="remove-circle-outline" size={22} color="white" />
+                  </TouchableOpacity>
+                  <Text style={styles.subtitleOffsetDisplay}>
+                    {(subtitleOffset / 1000).toFixed(1)}s
+                  </Text>
+                  <TouchableOpacity onPress={() => adjustSubtitleOffset(SUBTITLE_OFFSET_INCREMENT_MS)} style={styles.controlButton}>
+                    <Ionicons name="add-circle-outline" size={22} color="white" />
+                  </TouchableOpacity>
+                </>
+              )} */}
+
+              <TouchableOpacity onPress={openChangeSourceModal} style={styles.controlButton} disabled={isInitialLoading || !videoUrl || showSourceSelectionModal}>
+                {isChangingSource ? ( // isChangingSource now means modal-initiated attempt is active
+                  <ActivityIndicator size="small" color="white" />
+                ) : (
+                  <Ionicons name="cloudy" size={24} color="white" />
+                )}
+              </TouchableOpacity>
+
               {mediaType === 'tv' && (
                 <TouchableOpacity onPress={toggleEpisodesModal} style={styles.controlButton}>
                   <Ionicons name="albums-outline" size={24} color="white" />
                 </TouchableOpacity>
               )}
+              {/* <TouchableOpacity onPress={toggleSubtitlesModal} style={styles.controlButton}>
+                <Ionicons
+                  name="logo-closed-captioning"
+                  size={24}
+                  color={'white'} // Dynamic color // subtitlesEnabled && selectedLanguage ? '#E50914' : 'white'
+                />
+              </TouchableOpacity> */}
               {/* <RemotePlaybackButton style={styles.controlButton} /> */}
             </View>
           </SafeAreaView>
@@ -1828,14 +2204,54 @@ const renderEpisodesModal = () => {
       {/* Render Next Episode Button OUTSIDE the fading wrapper */}
       {renderNextEpisodeButton()}
 
-      {/* Subtitle Selection Modal */}
-      {renderSubtitleSelectionModal()}
+      {/* Subtitle Selection Modal - Removed */}
+      {/* {renderSubtitleSelectionModal()} */}
     
       {/* Episodes Viewer Modal */}
       {mediaType === 'tv' && renderEpisodesModal()}
 
       {/* Buffering Alert Modal */}
       {renderBufferingAlertModal()}
+
+      {/* Source Selection Modal */}
+      <SourceSelectionModal
+        visible={showSourceSelectionModal}
+        onClose={() => {
+          setShowSourceSelectionModal(false);
+          if (isChangingSource) { // If an attempt was active and modal closed manually
+            // Optionally cancel the ongoing WebView attempt here if possible, or just reset state
+            setIsChangingSource(false);
+            setManualWebViewVisible(false);
+            setCaptchaUrl(null);
+            setCurrentWebViewConfig(null);
+          }
+        }}
+        sources={availableSourcesList}
+        onSelectSource={handleSelectSourceFromModal}
+        currentAttemptStatus={sourceAttemptStatus}
+        currentPlayingSourceName={currentPlayingSourceName}
+      />
+
+      {/* Subtitles Selection Modal (New) */}
+      {/* <SubtitlesModal
+        visible={showSubtitlesModal}
+        onClose={() => {
+          setShowSubtitlesModal(false);
+          // Ensure orientation is re-locked if necessary, though toggleSubtitlesModal handles this
+          ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE)
+            .catch(e => console.error("Failed to re-lock to LANDSCAPE on SubtitlesModal direct close:", e));
+        }}
+        availableLanguages={Object.values(availableLanguages || {}).map(langInfo => ({
+          code: langInfo.language,
+          name: "" // getLanguageName(langInfo.language) // Use utility for consistent naming
+        }))}
+        selectedLanguage={selectedLanguage} // Pass the actual selected language code
+        onSelectLanguage={(langCode) => {
+          // selectSubtitle(langCode);
+          setShowSubtitlesModal(false); // Close modal after selection is initiated
+        }}
+        loading={loadingSubtitles}
+      /> */}
       </View>
         </GestureHandlerRootView>
       );
@@ -1875,8 +2291,15 @@ const renderEpisodesModal = () => {
   controlsWrapper: { ...StyleSheet.absoluteFillObject, zIndex: 5 },
   controlsContainer: { position: 'absolute', top: 0, left: 0, right: 0, flexDirection: 'row', padding: 10, alignItems: 'center', justifyContent: 'space-between' },
   backButton: { padding: 8 },
-  titleContainer: { flex: 1, marginLeft: 10, marginRight: 10 },
+  titleContainer: { flex: 1, marginLeft: 10, marginRight: 10, justifyContent: 'center' }, // Added justifyContent
   titleText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
+  currentSourceText: {
+    color: '#ccc',
+    fontSize: 11,
+    // marginLeft: 10, // If title is on its own line
+    marginTop: 2, // Space below title
+    fontStyle: 'italic',
+  },
   topRightButtons: { flexDirection: 'row' },
   controlButton: { padding: 8, marginLeft: 8 },
   brightnessSliderContainer: { position: 'absolute', left: 40, top: '20%', bottom: '20%', width: 40, justifyContent: 'center', alignItems: 'center' },
@@ -1885,7 +2308,7 @@ const renderEpisodesModal = () => {
   centerControls: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'center', alignItems: 'center', flexDirection: 'row' },
   playPauseButton: { borderRadius: 50, padding: 12, marginHorizontal: 30 },
   seekButton: { borderRadius: 40, padding: 8 },
-  bottomControls: { position: 'absolute', bottom: 0, left: 0, right: 0, flexDirection: 'row', alignItems: 'center', paddingHorizontal: -10, paddingVertical: 10 },
+  bottomControls: { position: 'absolute', bottom: 0, left: 0, right: 0, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 10 },
   progressBar: { flex: 1, height: 4, backgroundColor: 'rgba(255, 255, 255, 0.3)', marginHorizontal: 15, borderRadius: 2, overflow: 'visible' },
   progressFill: { height: '100%', backgroundColor: '#E50914', borderRadius: 2 },
   progressThumb: { position: 'absolute', top: -4, width: 12, height: 12, borderRadius: 6, backgroundColor: '#E50914', transform: [{ translateX: -6 }], zIndex: 3 },
@@ -1925,27 +2348,42 @@ const renderEpisodesModal = () => {
     fontWeight: 'normal', // Less emphasis than the main title
     marginLeft: 4, // Reduced margin slightly
   },
+  subtitleOffsetDisplay: {
+    color: 'white',
+    fontSize: 13, // Slightly smaller to fit
+    fontWeight: 'bold',
+    marginHorizontal: 3, // Reduced margin
+    paddingHorizontal: 3,
+    alignSelf: 'center', // Vertically align with buttons
+    minWidth: 45, // Ensure enough space for "-xx.xs"
+    textAlign: 'center',
+    // backgroundColor: 'rgba(0,0,0,0.3)', // Optional subtle background
+    // borderRadius: 3,
+  },
   // --- Subtitle Styles ---
   subtitleTextContainer: {
     position: 'absolute',
-    bottom: 80, // Adjust as needed, above bottom controls
-    left: 20,
-    right: 20,
-    alignItems: 'center',
-    zIndex: 7, // Above overlay, below controls when visible
-    pointerEvents: 'none', // Allow touches to pass through
+    bottom: 30, // Lowered position
+    left: '5%', // Use percentage for better responsiveness
+    right: '5%',
+    alignItems: 'center', // Center the text block itself
+    zIndex: 7,
+    pointerEvents: 'none',
   },
   subtitleText: {
-    fontSize: 18,
+    fontSize: Platform.OS === 'android' ? 16 : 18, // Slightly smaller on Android for better fit
     color: 'white',
     textAlign: 'center',
-    textShadowColor: 'rgba(0, 0, 0, 0.8)',
-    textShadowOffset: { width: 1, height: 1 },
-    textShadowRadius: 3,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)', // Optional background for better readability
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 4,
+    backgroundColor: 'rgba(0, 0, 0, 0.65)', // Darker, slightly more opaque background
+    paddingHorizontal: 10, // More horizontal padding
+    paddingVertical: 5,    // More vertical padding
+    borderRadius: 5,       // Slightly more rounded corners
+    textShadowColor: 'rgba(0, 0, 0, 0.9)', // Stronger shadow for outline effect
+    textShadowOffset: { width: 1, height: 1.5 },
+    textShadowRadius: 2,
+    elevation: 1, // For Android shadow, subtle
+    // Consider adding maxWidth if lines get too long on very wide screens,
+    // but usually, subtitle lines are short.
   },
   modalOverlay: {
     flex: 1,
@@ -2027,6 +2465,7 @@ const renderEpisodesModal = () => {
     backgroundColor: '#141414',
     width: '95%', // Wider modal
     height: '90%', // Taller modal
+    maxHeight: 380,
     borderRadius: 8, // Slightly less rounded
     // marginTop: 100, // Remove fixed margin top
     paddingTop: 0, // Remove padding at the top, header will handle it

@@ -1,7 +1,7 @@
 {
   "name": "flux",
-  "version": "1.1.0",
-  "version-iteration": 4,
+  "version": "1.1.1",
+  "version-iteration": 5,
   "main": "index.js",
   "scripts": {
     "start": "expo start",
@@ -29,6 +29,7 @@
     "parse-srt": "^1.0.0-alpha",
     "react": "18.3.1",
     "react-native": "0.76.9",
+    "react-native-draggable-flatlist": "^4.0.3",
     "react-native-gesture-handler": "~2.20.2",
     "react-native-reanimated": "~3.16.1",
     "react-native-safe-area-context": "4.12.0",

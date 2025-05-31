@@ -8,7 +8,8 @@ import {
   ScrollView,
   Alert,
   ActivityIndicator,
-  Platform  // Import Platform
+  Platform, // Import Platform
+  Dimensions
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -16,9 +17,18 @@ import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import Animated, { useSharedValue, useAnimatedStyle, withTiming } from 'react-native-reanimated';
 import Constants from 'expo-constants';
-// Import storage functions, including clearSearchHistory
-import { clearStreamCache, saveAutoPlaySetting, getAutoPlaySetting, clearSearchHistory as clearAllSearchHistoryStorage } from '../utils/storage';
+// Import storage functions
+import {
+  clearStreamCache,
+  saveAutoPlaySetting,
+  getAutoPlaySetting,
+  clearSearchHistory as clearAllSearchHistoryStorage,
+  saveStreamSourceOrder, // New import
+  getStreamSourceOrder,  // New import
+} from '../utils/storage';
+import { DEFAULT_STREAM_SOURCES as apiDefaultSources, initializeStreamSources as refreshApiSources } from '../api/vidsrcApi'; // Import available sources and initializer
 import { getCheckForUpdatesSetting, setCheckForUpdatesSetting, checkForUpdates as performUpdateCheck } from '../utils/updateChecker';
+import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist'; // New import
 
 const THEME_KEY = 'app_theme';
 const SEARCH_HISTORY_KEY = 'searchHistory'; // Define key for consistency
@@ -33,6 +43,10 @@ const SettingsScreen = () => {
   const [storageUsageValue, setStorageUsageValue] = useState(0);
   const [storageUsageUnit, setStorageUsageUnit] = useState('KB'); // State for storage unit (KB/MB)
   const opacity = useSharedValue(0); // Animated value
+  const [streamSources, setStreamSources] = useState([]); // State for draggable stream sources
+  const [originalStreamSources, setOriginalStreamSources] = useState([]); // To track original order for changes
+  const [sourceOrderChanged, setSourceOrderChanged] = useState(false); // Track if order has changed
+  const [isSavingOrder, setIsSavingOrder] = useState(false); // State for save button loader
 
   // Animated style
   const animatedStyle = useAnimatedStyle(() => {
@@ -106,6 +120,13 @@ const SettingsScreen = () => {
           setStorageUsageUnit('MB');
         }
 
+        // Load stream source order
+        const sources = await getStreamSourceOrder();
+        setStreamSources([...sources.map(s => ({...s}))]); // Use deep copy for draggable list
+        setOriginalStreamSources([...sources.map(s => ({...s}))]); // Use deep copy for original state
+        setSourceOrderChanged(false); // Reset changed state
+
+
       } catch (error) {
         console.error('Error loading settings or calculating storage:', error);
       } finally {
@@ -115,6 +136,22 @@ const SettingsScreen = () => {
 
     loadSettingsAndStorage();
   }, []); // Empty dependency array means this runs once on mount
+
+  const loadStreamSources = async () => { // Called on focus
+    const sources = await getStreamSourceOrder();
+    setStreamSources([...sources.map(s => ({...s}))]);
+    setOriginalStreamSources([...sources.map(s => ({...s}))]);
+    setSourceOrderChanged(false); // Reset changed state on focus/reload
+  };
+
+  // Function to compare source orders
+  const compareSourceOrders = (orderA, orderB) => {
+    if (orderA.length !== orderB.length) return true; // Different lengths mean changed
+    for (let i = 0; i < orderA.length; i++) {
+      if (orderA[i].name !== orderB[i].name) return true; // Different names at same position
+    }
+    return false; // Orders are the same
+  };
 
   // Function to recalculate storage and specific counts
   const refreshStorageData = async () => {
@@ -163,6 +200,53 @@ const SettingsScreen = () => {
       setLoading(false);
     }
   };
+
+  // --- Stream Source Order Logic ---
+  const renderDraggableSourceItem = ({ item, drag, isActive }) => {
+    return (
+      // <ScaleDecorator> was removed, which is correct for no zoom.
+      <TouchableOpacity
+        onPressIn={drag}
+        disabled={isActive}
+        style={[
+          styles.draggableItem,
+          isActive && styles.draggableItemActive, // Re-add active style
+        ]}
+      >
+        <View style={styles.draggableItemContent}>
+          <Ionicons name="menu" size={24} color="#ccc" style={styles.dragHandleIcon} />
+          <Text style={styles.draggableItemText}>{item.name}</Text>
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
+  const handleDragEnd = ({ data }) => {
+    setStreamSources(data);
+    setSourceOrderChanged(compareSourceOrders(data, originalStreamSources));
+  };
+
+  const handleUndoSourceOrder = () => {
+    setStreamSources([...originalStreamSources.map(s => ({...s}))]); // Revert to original, ensure deep copy
+    setSourceOrderChanged(false);
+  };
+
+  const handleSaveSourceOrder = async () => {
+    setIsSavingOrder(true);
+    try {
+      await saveStreamSourceOrder(streamSources);
+      await refreshApiSources(); // Re-initialize sources in vidsrcApi
+      setOriginalStreamSources([...streamSources.map(s => ({...s}))]); // Update original to new saved state
+      setSourceOrderChanged(false); // Reset changed state
+      Alert.alert('Success', 'Stream source order saved.');
+    } catch (error) {
+      Alert.alert('Error', 'Could not save stream source order.');
+      console.error("Error saving source order:", error);
+    } finally {
+      setIsSavingOrder(false);
+    }
+  };
+  // --- End Stream Source Order Logic ---
 
 
   // Save autoplay setting using the new function
@@ -271,11 +355,13 @@ const SettingsScreen = () => {
       opacity.value = 0; // Reset
       opacity.value = withTiming(1, { duration: 300 }); // Fade in
       refreshStorageData(); // Refresh data when screen comes into focus
+      loadStreamSources(); // Also refresh stream sources on focus
       return () => {
         // Optional: any cleanup when screen loses focus
       };
     }, [opacity]) // opacity is the dependency for the animation part
   );
+
 
   if (loading) {
     return (
@@ -326,6 +412,46 @@ const SettingsScreen = () => {
             <TouchableOpacity style={styles.button} onPress={handleManualUpdateCheck}>
               <Text style={styles.buttonText}>Check for Updates Now</Text>
             </TouchableOpacity>
+          </View>
+
+          {/* Stream Source Order Section */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Stream Source Priority</Text>
+            <Text style={styles.sectionSubtitle}>Drag to reorder. The app will try sources from top to bottom.</Text>
+            {streamSources.length > 0 ? (
+              <DraggableFlatList
+                data={streamSources}
+                onDragEnd={handleDragEnd} // Use new handler
+                keyExtractor={(item) => item.name}
+                renderItem={renderDraggableSourceItem}
+                containerStyle={{ marginBottom: 10 }}
+                scrollEnabled={false} // Disable scrolling for the DraggableFlatList
+              />
+            ) : (
+              <Text style={styles.infoValue}>Loading sources...</Text>
+            )}
+            {sourceOrderChanged && (
+              <View style={styles.buttonContainer}>
+                <TouchableOpacity
+                  style={[styles.button, styles.halfButton, styles.undoButton]}
+                  onPress={handleUndoSourceOrder}
+                  disabled={isSavingOrder} // Also disable undo while saving
+                >
+                  <Text style={styles.buttonText}>Undo</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.button, styles.halfButton, styles.saveButton, isSavingOrder && styles.buttonDisabled]}
+                  onPress={handleSaveSourceOrder}
+                  disabled={isSavingOrder}
+                >
+                  {isSavingOrder ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Text style={styles.buttonText}>Save Order</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            )}
           </View>
 
           <View style={styles.section}>
@@ -471,9 +597,67 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 10,
   },
+  buttonContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 0,
+  },
+  halfButton: {
+    flex: 1, // Each button takes half the space
+    marginHorizontal: 5, // Add some spacing between buttons
+  },
+  undoButton: {
+    backgroundColor: '#555', // A different color for undo
+  },
+  saveButton: {
+    // backgroundColor: '#333', // Default button color, already set by styles.button
+  },
+  buttonDisabled: {
+    backgroundColor: '#555',
+  },
   buttonText: {
     color: '#fff',
     fontWeight: '600',
+  },
+  sectionSubtitle: {
+    color: '#aaa',
+    fontSize: 13,
+    marginBottom: 15,
+    lineHeight: 18,
+  },
+  draggableItem: {
+    backgroundColor: '#222',
+    paddingVertical: 12,
+    paddingHorizontal: 15,
+    borderRadius: 6,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#333',
+  },
+  draggableItemActive: {
+    // backgroundColor: '#333', // Optional: slightly different background when active
+    borderColor: '#FFFFFF',    // White outline
+    borderWidth: 1.5,           // Make the outline a bit thicker to be noticeable
+    // Ensure no shadow properties are here if they were added previously by mistake
+    // elevation: 0, // Explicitly set elevation to 0 if needed to remove Android shadow
+  },
+  draggableItemContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  dragHandleIcon: {
+    marginRight: 12,
+  },
+  draggableItemText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '500',
+    flex: 1, // Take available space
+  },
+  draggableItemDetail: {
+    color: '#999',
+    fontSize: 13,
+    marginLeft: 10,
   },
   infoItem: {
     flexDirection: 'row',

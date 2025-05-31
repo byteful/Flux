@@ -3,6 +3,7 @@ import { StyleSheet, Image, TouchableOpacity, Dimensions, View, Text, Alert } fr
 import { getImageUrl } from '../api/tmdbApi';
 import ImagePlaceholder from './ImagePlaceholder';
 import { Ionicons } from '@expo/vector-icons';
+import Badge from './Badge';
 
 const { width } = Dimensions.get('window');
 const FOOTER_HEIGHT = 45;
@@ -56,34 +57,7 @@ const MediaCard = ({
     }
   };
 
-  let badgeText = null;
-  if (!isContinueWatching) {
-    const oneWeekAgo = new Date();
-    oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
-
-    const mediaType = item.media_type || (item.title ? 'movie' : 'tv'); // Determine mediaType if not explicitly passed
-
-    if (mediaType === 'movie' && item.release_date) {
-      const releaseDateObj = new Date(item.release_date);
-      if (releaseDateObj >= oneWeekAgo) {
-        badgeText = "NEW";
-      }
-    } else if (mediaType === 'tv') {
-      if (item.last_air_date) { // Check for new episodes
-        const lastAirDateObj = new Date(item.last_air_date);
-        if (lastAirDateObj >= oneWeekAgo) {
-          badgeText = "New Episodes";
-        }
-      }
-      // Fallback to show's first air date if no "New Episodes" and show itself is new
-      if (!badgeText && item.first_air_date) {
-        const firstAirDateObj = new Date(item.first_air_date);
-        if (firstAirDateObj >= oneWeekAgo) {
-          badgeText = "NEW";
-        }
-      }
-    }
-  }
+  const mediaType = item.media_type || (item.title ? 'movie' : 'tv');
 
   return (
     <View style={[styles.outerContainer, { width: cardWidth }]}>
@@ -104,10 +78,13 @@ const MediaCard = ({
             <ImagePlaceholder width={cardWidth} height={imageContainerHeight} />
           )}
 
-          {badgeText && (
-            <View style={styles.newBadge}>
-              <Text style={styles.newBadgeText}>{badgeText}</Text>
-            </View>
+          {!isContinueWatching && (
+            <Badge
+              mediaType={mediaType}
+              releaseDate={item.release_date}
+              firstAirDate={item.first_air_date}
+              lastAirDate={item.last_air_date}
+            />
           )}
 
           {isContinueWatching && (
@@ -228,21 +205,6 @@ const styles = StyleSheet.create({
   },
   iconButton: {
     padding: 3,
-  },
-  newBadge: {
-    position: 'absolute',
-    top: 8,
-    left: 8,
-    backgroundColor: 'red',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-    zIndex: 1, // Ensure badge is on top
-  },
-  newBadgeText: {
-    color: 'white',
-    fontSize: 10,
-    fontWeight: 'bold',
   },
 });
 

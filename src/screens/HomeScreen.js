@@ -168,7 +168,6 @@ const HomeScreen = () => {
           console.error("Error fetching recommendations based on watch history:", recError);
         }
       } else {
-        console.log("No watch history found, skipping recommendations based on history.");
       }
 
       // Shuffle popular movies and TV shows

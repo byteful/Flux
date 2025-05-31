@@ -7,6 +7,21 @@ const CACHE_EXPIRATION_MS = 3 * 24 * 60 * 60 * 1000; // 3 days expiration
 const AUTO_PLAY_KEY = 'autoPlayEnabled';
 const SEARCH_HISTORY_KEY = 'searchHistory';
 const MAX_SEARCH_HISTORY_ITEMS = 15;
+const LAST_SUBTITLE_LANG_KEY = 'lastSubtitleLanguage';
+const SUBTITLES_ENABLED_KEY = 'subtitlesEnabled'; // New key for enabled state
+
+// --- Stream Source Order ---
+const STREAM_SOURCE_ORDER_KEY = 'streamSourceOrder';
+
+// Define default sources here, so it's accessible by other modules if needed
+// This should match the `name` property of the sources in vidsrcApi.js
+// Also include defaultBaseUrl which will be used by vidsrcApi.js if a source is newly added.
+export const DEFAULT_STREAM_SOURCES = [
+  { name: 'hexa.watch', timeoutInSeconds: 10, type: 'direct', defaultBaseUrl: 'https://hexa.watch/watch' },
+  { name: 'embed.su', timeoutInSeconds: 10, type: 'direct', defaultBaseUrl: 'https://embed.su/embed' },
+  { name: 'vidsrc.su', timeoutInSeconds: 10, type: 'direct', defaultBaseUrl: 'https://vidsrc.su/embed' }
+  // Add other sources here with their default properties if they are introduced
+];
 
 export const saveWatchProgress = async (mediaId, data) => {
   try {
@@ -137,15 +152,16 @@ export const removeFromContinueWatching = async (mediaId) => {
 
 // --- Stream Cache Functions ---
 
-// Save a stream URL and its referer to the cache
-export const saveStreamUrl = async (contentId, url, referer) => {
-  if (!contentId || !url) return false; // referer can be null
+// Save a stream URL, its referer, and sourceName to the cache
+export const saveStreamUrl = async (contentId, url, referer, sourceName) => {
+  if (!contentId || !url) return false; // referer can be null, sourceName can be null
   try {
     const cacheString = await AsyncStorage.getItem(STREAM_CACHE_KEY);
     const cache = cacheString ? JSON.parse(cacheString) : {};
     cache[contentId] = {
       url: url,
       referer: referer, // Store the referer
+      sourceName: sourceName, // Store the sourceName
       timestamp: Date.now(),
     };
     await AsyncStorage.setItem(STREAM_CACHE_KEY, JSON.stringify(cache));
@@ -164,11 +180,15 @@ export const getCachedStreamUrl = async (contentId) => {
     const cache = cacheString ? JSON.parse(cacheString) : {};
     const entry = cache[contentId];
 
-    if (entry && entry.url && entry.timestamp) { // referer might be null, so don't check for its existence here
+    if (entry && entry.url && entry.timestamp) { // referer and sourceName might be null
       const isExpired = (Date.now() - entry.timestamp) > CACHE_EXPIRATION_MS;
       if (!isExpired) {
-        // Return an object containing both url and referer
-        return { url: entry.url, referer: entry.referer !== undefined ? entry.referer : null };
+        // Return an object containing url, referer, and sourceName
+        return {
+          url: entry.url,
+          referer: entry.referer !== undefined ? entry.referer : null,
+          sourceName: entry.sourceName !== undefined ? entry.sourceName : null
+        };
       } else {
         delete cache[contentId];
         await AsyncStorage.setItem(STREAM_CACHE_KEY, JSON.stringify(cache));
@@ -194,9 +214,7 @@ export const clearSpecificStreamFromCache = async (contentId) => {
     if (cache[contentId]) {
       delete cache[contentId];
       await AsyncStorage.setItem(STREAM_CACHE_KEY, JSON.stringify(cache));
-      console.log(`Cleared cached stream URL for ${contentId} from main cache object.`);
     } else {
-      console.log(`No cached stream URL found for ${contentId} in main cache object to clear.`);
     }
   } catch (e) {
     console.error(`Failed to clear cached stream URL for ${contentId} from main cache object.`, e);
@@ -298,6 +316,112 @@ export const clearSearchHistory = async () => {
   }
 };
 
+// --- Subtitle Preference Functions ---
+
+export const saveLastSelectedSubtitleLanguage = async (languageCode) => {
+  try {
+    // languageCode can be a string (e.g., 'en') or null (for 'None')
+    if (languageCode === null) {
+      await AsyncStorage.setItem(LAST_SUBTITLE_LANG_KEY, 'none'); // Store 'none' as a special string
+    } else {
+      await AsyncStorage.setItem(LAST_SUBTITLE_LANG_KEY, languageCode);
+    }
+    return true;
+  } catch (error) {
+    console.error('Error saving last selected subtitle language:', error);
+    return false;
+  }
+};
+
+export const getLastSelectedSubtitleLanguage = async () => {
+  try {
+    const languageCode = await AsyncStorage.getItem(LAST_SUBTITLE_LANG_KEY);
+    if (languageCode === 'none') {
+      return null; // Convert 'none' back to null
+    }
+    return languageCode; // Returns the code string or null if not set
+  } catch (error) {
+    console.error('Error getting last selected subtitle language:', error);
+    return null; // Default to null on error
+  }
+};
+
+// --- End Subtitle Preference Functions ---
+
+// --- Subtitles Enabled State Functions ---
+export const saveSubtitlesEnabledState = async (isEnabled) => {
+  try {
+    await AsyncStorage.setItem(SUBTITLES_ENABLED_KEY, JSON.stringify(isEnabled));
+    return true;
+  } catch (error) {
+    console.error('Error saving subtitles enabled state:', error);
+    return false;
+  }
+};
+
+export const getSubtitlesEnabledState = async () => {
+  try {
+    const storedState = await AsyncStorage.getItem(SUBTITLES_ENABLED_KEY);
+    if (storedState === null) {
+      return false; // Default to false (subtitles off) if never set
+    }
+    return JSON.parse(storedState);
+  } catch (error) {
+    console.error('Error getting subtitles enabled state:', error);
+    return false; // Default to false on error
+  }
+};
+// --- End Subtitles Enabled State Functions ---
+
+export const saveStreamSourceOrder = async (sourceOrder) => {
+  // sourceOrder should be an array of objects like: { name: 'vidsrc.cc', timeoutInSeconds: 20 }
+  // We only really need to store the names and their order. Timeouts can be part of this object too.
+  try {
+    const storableOrder = sourceOrder.map(s => ({ name: s.name, timeoutInSeconds: s.timeoutInSeconds }));
+    await AsyncStorage.setItem(STREAM_SOURCE_ORDER_KEY, JSON.stringify(storableOrder));
+  } catch (error) {
+    console.error('Error saving stream source order:', error);
+  }
+};
+
+export const getStreamSourceOrder = async () => {
+  try {
+    const storedOrderJson = await AsyncStorage.getItem(STREAM_SOURCE_ORDER_KEY);
+    let effectiveOrder = [...DEFAULT_STREAM_SOURCES.map(s => ({...s}))]; // Start with a deep copy of defaults
+
+    if (storedOrderJson) {
+      const storedOrder = JSON.parse(storedOrderJson);
+      // Create a new array based on storedOrder, validating against DEFAULT_STREAM_SOURCES
+      const orderedFromStorage = storedOrder.map(storedSource => {
+        const defaultDetail = DEFAULT_STREAM_SOURCES.find(ds => ds.name === storedSource.name);
+        if (defaultDetail) {
+          // Merge: take name from stored (it's the key), timeout from stored if present, else from default.
+          // type and defaultBaseUrl always come from default.
+          return {
+            name: storedSource.name,
+            timeoutInSeconds: storedSource.timeoutInSeconds !== undefined ? storedSource.timeoutInSeconds : defaultDetail.timeoutInSeconds,
+            type: defaultDetail.type,
+            defaultBaseUrl: defaultDetail.defaultBaseUrl
+          };
+        }
+        return null; // This source from storage is no longer in defaults
+      }).filter(Boolean); // Remove nulls
+
+      // Add any new default sources that weren't in the stored order
+      const newSources = DEFAULT_STREAM_SOURCES.filter(defaultSource =>
+        !orderedFromStorage.some(os => os.name === defaultSource.name)
+      );
+      
+      effectiveOrder = [...orderedFromStorage, ...newSources.map(s => ({...s}))];
+    }
+    return effectiveOrder;
+  } catch (error) {
+    console.error('Error getting stream source order:', error);
+    return [...DEFAULT_STREAM_SOURCES.map(s => ({...s}))]; // Return a deep copy on error
+  }
+};
+// --- End Stream Source Order ---
+
 export default {
   saveWatchProgress,
   getWatchProgress,
@@ -315,4 +439,12 @@ export default {
   getSearchHistory,
   removeSearchQuery,
   clearSearchHistory,
+  saveLastSelectedSubtitleLanguage,
+  getLastSelectedSubtitleLanguage,
+  saveSubtitlesEnabledState,
+  getSubtitlesEnabledState,
+  // Stream Source Order
+  saveStreamSourceOrder,
+  getStreamSourceOrder,
+  DEFAULT_STREAM_SOURCES, // Exporting for use in settings or API layer
 };

@@ -27,7 +27,10 @@ export const searchSubtitles = async (tmdbId, language = 'en', season, episode) 
     const params = {
       tmdb_id: tmdbId,
       languages: language,
-      order_by: "votes",
+      // Prioritize subtitles that matched by video hash, then by trusted sources, then by download count.
+      // The API likely only takes one primary order_by. We'll use moviehash_match.
+      // Further sorting/selection will be done client-side.
+      order_by: "moviehash_match",
       order_direction: "desc"
     };
     if (season !== undefined) params.season_number = season;
