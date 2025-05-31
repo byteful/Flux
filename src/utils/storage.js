@@ -137,14 +137,15 @@ export const removeFromContinueWatching = async (mediaId) => {
 
 // --- Stream Cache Functions ---
 
-// Save a stream URL to the cache
-export const saveStreamUrl = async (contentId, url) => {
-  if (!contentId || !url) return false;
+// Save a stream URL and its referer to the cache
+export const saveStreamUrl = async (contentId, url, referer) => {
+  if (!contentId || !url) return false; // referer can be null
   try {
     const cacheString = await AsyncStorage.getItem(STREAM_CACHE_KEY);
     const cache = cacheString ? JSON.parse(cacheString) : {};
     cache[contentId] = {
       url: url,
+      referer: referer, // Store the referer
       timestamp: Date.now(),
     };
     await AsyncStorage.setItem(STREAM_CACHE_KEY, JSON.stringify(cache));
@@ -163,17 +164,18 @@ export const getCachedStreamUrl = async (contentId) => {
     const cache = cacheString ? JSON.parse(cacheString) : {};
     const entry = cache[contentId];
 
-    if (entry && entry.url && entry.timestamp) {
+    if (entry && entry.url && entry.timestamp) { // referer might be null, so don't check for its existence here
       const isExpired = (Date.now() - entry.timestamp) > CACHE_EXPIRATION_MS;
       if (!isExpired) {
-        return entry.url;
+        // Return an object containing both url and referer
+        return { url: entry.url, referer: entry.referer !== undefined ? entry.referer : null };
       } else {
         delete cache[contentId];
         await AsyncStorage.setItem(STREAM_CACHE_KEY, JSON.stringify(cache));
-        return null;
+        return null; // Return null if expired
       }
     }
-    return null;
+    return null; // Return null if no valid entry
   } catch (error) {
     console.error('Error getting cached stream URL:', error);
     return null;

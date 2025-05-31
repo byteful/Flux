@@ -20,7 +20,7 @@ import { runOnJS } from 'react-native-reanimated';
 
 // Constants for auto-play
 const VIDEO_END_THRESHOLD_SECONDS = 45; // Show button 45 secs before end
-const BUFFER_TIMEOUT = 10; // 10 seconds
+const BUFFER_TIMEOUT = 20; // 20 seconds
 
 const VideoPlayerScreen = ({ route }) => {
   const navigation = useNavigation(); // Use hook for navigation access
@@ -64,6 +64,7 @@ const VideoPlayerScreen = ({ route }) => {
   const [showControls, setShowControls] = useState(false);
   const [isPlaying, setIsPlaying] = useState(true);
   const [videoUrl, setVideoUrl] = useState(null);
+  const [streamReferer, setStreamReferer] = useState(null); // Added state for referer
   const [duration, setDuration] = useState(0);
   const [position, setPosition] = useState(0);
   const [resumeTime, setResumeTime] = useState(0);
@@ -150,19 +151,24 @@ const VideoPlayerScreen = ({ route }) => {
     setShowControls(value);
   }, [setShowControls]);
 
-  const getStreamHeaders = () => {
-    // ... (keep existing headers function)
+  const getStreamHeaders = useCallback(() => {
     const headers = {
-      'Referer': 'https://vidsrc.su/',
-      'Origin': 'https://vidsrc.su',
+      'Origin': 'https://vidsrc.su', // Keep a default origin
       'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       'Accept': '*/*'
     };
+    if (streamReferer) {
+      headers['Referer'] = streamReferer;
+    } else {
+      // Fallback if streamReferer is null or undefined
+      headers['Referer'] = 'https://vidsrc.su/';
+    }
+    // console.log('[VideoPlayerScreen] getStreamHeaders returning:', JSON.stringify(headers));
     return headers;
-  };
+  }, [streamReferer]); // Depend on streamReferer
 
   const player = useVideoPlayer({
-    headers: getStreamHeaders(),
+    headers: getStreamHeaders(), // Will be updated when streamReferer changes
     uri: videoUrl,
     metadata: {
       title: episodeTitle || title
@@ -842,6 +848,8 @@ const VideoPlayerScreen = ({ route }) => {
     if (!player || !videoUrl || isUnmounting) return;
 
     setLoading(true);
+    // Ensure getStreamHeaders is called here to get the latest headers
+    // based on potentially updated streamReferer state.
     player.replace({ uri: videoUrl, headers: getStreamHeaders() });
 
     const playTimer = setTimeout(() => {
@@ -898,11 +906,17 @@ const VideoPlayerScreen = ({ route }) => {
       // ... (keep existing stream extraction setup) ...
       const config = extractM3U8Stream(
         mediaId, mediaType, season, episode,
-        (streamUrl) => {
-          if (!isMounted || streamExtractionComplete || videoUrl) return;
+        (streamUrl, referer) => { // Modified to accept referer
+          // console.log(`[VideoPlayerScreen] onStreamFound called. URL: ${streamUrl}, Referer: ${referer}`);
+          if (!isMounted || streamExtractionComplete || (videoUrl && streamReferer === referer)) {
+            // console.log('[VideoPlayerScreen] onStreamFound: Bailing out - already processed or not mounted.');
+            return;
+          }
           const processedUrl = Platform.OS === 'ios' ? streamUrl.replace('http://', 'https://') : streamUrl;
-          saveStreamUrl(contentId, processedUrl);
+          // console.log(`[VideoPlayerScreen] Saving stream to cache. Content ID: ${contentId}, URL: ${processedUrl}, Referer: ${referer}`);
+          saveStreamUrl(contentId, processedUrl, referer); // Save referer along with URL
           setVideoUrl(processedUrl);
+          setStreamReferer(referer); // Set the referer state
           setStreamExtractionComplete(true);
           setManualWebViewVisible(false);
           setCaptchaUrl(null);
@@ -936,11 +950,15 @@ const VideoPlayerScreen = ({ route }) => {
       }
 
       // Check cache
-      const cachedUrl = await getCachedStreamUrl(contentId);
-      if (cachedUrl && isMounted) {
-        setVideoUrl(cachedUrl);
+      const cachedStreamData = await getCachedStreamUrl(contentId); // Returns { url, referer } or null
+      // console.log(`[VideoPlayerScreen] Checked cache for ${contentId}. Found:`, cachedStreamData);
+      if (cachedStreamData && cachedStreamData.url && isMounted) {
+        // console.log(`[VideoPlayerScreen] Using cached stream. URL: ${cachedStreamData.url}, Referer: ${cachedStreamData.referer}`);
+        setVideoUrl(cachedStreamData.url);
+        setStreamReferer(cachedStreamData.referer); // Set referer from cache
         setStreamExtractionComplete(true);
       } else if (isMounted) {
+        // console.log('[VideoPlayerScreen] No valid cached stream found or not mounted. Setting up new stream extraction.');
         setupStreamExtraction();
       }
 
@@ -985,6 +1003,20 @@ const VideoPlayerScreen = ({ route }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [navigation, contentId, mediaId, mediaType, season, episode, retryAttempts, player]); // Added player
   // --- End Main Setup Effect ---
+
+  // --- Corrective Effect for Stuck Buffering Spinner ---
+  useEffect(() => {
+    // If isPlaying becomes true, and the buffering spinner is still on,
+    // it's likely stuck from a previous seek. Force it off.
+    if (isPlaying && isBufferingVideo) {
+      setIsBufferingVideo(false);
+      // Also ensure general loading is off if it's not the initial load phase
+      if (loading && !isInitialLoading) {
+        setLoading(false);
+      }
+    }
+  }, [isPlaying, isBufferingVideo, loading, isInitialLoading]); // Dependencies
+  // --- End Corrective Effect ---
 
   // --- Save Progress ---
   const saveProgress = (currentTime) => {
@@ -1124,14 +1156,15 @@ const VideoPlayerScreen = ({ route }) => {
 
   // --- Time Formatting ---
   const formatTime = (timeInSeconds) => {
-    if (isNaN(timeInSeconds) || timeInSeconds < 0) return '0:00';
+    if (isNaN(timeInSeconds) || timeInSeconds < 0) return '00:00';
     const hours = Math.floor(timeInSeconds / 3600);
     const minutes = Math.floor((timeInSeconds % 3600) / 60);
     const seconds = Math.floor(timeInSeconds % 60);
-    const formattedMinutes = String(minutes).padStart(hours > 0 ? 2 : 1, '0');
+    const formattedHours = String(hours).padStart(2, '0');
+    const formattedMinutes = String(minutes).padStart(2, '0');
     const formattedSeconds = String(seconds).padStart(2, '0');
     return hours > 0
-      ? `${hours}:${formattedMinutes}:${formattedSeconds}`
+      ? `${formattedHours}:${formattedMinutes}:${formattedSeconds}`
       : `${formattedMinutes}:${formattedSeconds}`;
   };
 
@@ -1852,13 +1885,13 @@ const renderEpisodesModal = () => {
   centerControls: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'center', alignItems: 'center', flexDirection: 'row' },
   playPauseButton: { borderRadius: 50, padding: 12, marginHorizontal: 30 },
   seekButton: { borderRadius: 40, padding: 8 },
-  bottomControls: { position: 'absolute', bottom: 0, left: 0, right: 0, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 10 },
-  progressBar: { flex: 1, height: 4, backgroundColor: 'rgba(255, 255, 255, 0.3)', marginHorizontal: 10, borderRadius: 2, overflow: 'visible' },
+  bottomControls: { position: 'absolute', bottom: 0, left: 0, right: 0, flexDirection: 'row', alignItems: 'center', paddingHorizontal: -10, paddingVertical: 10 },
+  progressBar: { flex: 1, height: 4, backgroundColor: 'rgba(255, 255, 255, 0.3)', marginHorizontal: 15, borderRadius: 2, overflow: 'visible' },
   progressFill: { height: '100%', backgroundColor: '#E50914', borderRadius: 2 },
   progressThumb: { position: 'absolute', top: -4, width: 12, height: 12, borderRadius: 6, backgroundColor: '#E50914', transform: [{ translateX: -6 }], zIndex: 3 },
   progressTouchArea: { position: 'absolute', height: 20, width: '100%', top: -8, backgroundColor: 'transparent', zIndex: 4 },
-  timeText: { color: '#fff', fontSize: 14 },
-
+  timeText: { color: '#fff', fontSize: 14, minWidth: 40, textAlign: 'center' },
+  
   // --- New Styles for Next Episode Button ---
   nextEpisodeContainer: {
     position: 'absolute',

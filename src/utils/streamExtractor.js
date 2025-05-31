@@ -36,8 +36,10 @@ export const extractM3U8Stream = (tmdbId, type, season, episode, onStreamFound, 
       // Store original fetch and XMLHttpRequest to monitor network requests
       const originalFetch = window.fetch;
       const originalXHR = window.XMLHttpRequest;
-      let m3u8UrlsFound = [];
+      let m3u8UrlsFound = []; // Array of { url: string, referer: string | null }
       let mainM3u8Found = false;
+      let streamFoundAndPosted = false; // Flag to stop further processing
+      let domScanInterval = null; // To store the interval ID
 
       waitForElement('#player > iframe').then(iframe => {
         window.location.href = iframe.src;
@@ -65,25 +67,23 @@ export const extractM3U8Stream = (tmdbId, type, season, episode, onStreamFound, 
         // This also corrects the original logic which prematurely set mainM3u8Found
         setTimeout(() => {
             const currentSrc = videoElement.src;
-            if (currentSrc && (currentSrc.includes('.m3u8') || currentSrc.includes('.mp4'))) { // Check for m3u8 (mp4 check commented for now)
+            if (currentSrc && (currentSrc.includes('.m3u8') || currentSrc.includes('.mp4'))) { // Check for m3u8 or mp4
               // Only consider this a "main" stream if one hasn't been definitively found by fetch/XHR yet
               // and if it's not already in our list.
-              if (!m3u8UrlsFound.includes(currentSrc)) {
-                  m3u8UrlsFound.push(currentSrc);
+              if (!m3u8UrlsFound.some(item => item.url === currentSrc)) {
+                  m3u8UrlsFound.push({ url: currentSrc, referer: null }); // DOM source, no specific referer
                   // If no main M3U8 (master/playlist) has been found yet via network requests,
                   // this src (if m3u8) could be it.
-                  if (!mainM3u8Found && currentSrc.includes('.m3u8')) {
+                  if (!mainM3u8Found) {
                       mainM3u8Found = true; // Tentatively mark as main
-                      window.ReactNativeWebView.postMessage(JSON.stringify({
-                          type: 'stream',
-                          url: currentSrc
-                      }));
+                      const videoSrcPayload = { type: 'stream', url: currentSrc, referer: null };
+                      window.ReactNativeWebView.postMessage(JSON.stringify(videoSrcPayload));
+                      streamFoundAndPosted = true;
+                      if (domScanInterval) clearInterval(domScanInterval);
                   } else {
                       // Otherwise, it's a candidate
-                      window.ReactNativeWebView.postMessage(JSON.stringify({
-                          type: 'stream_candidate',
-                          url: currentSrc
-                      }));
+                       const videoSrcCandidatePayload = { type: 'stream_candidate', url: currentSrc, referer: null };
+                       window.ReactNativeWebView.postMessage(JSON.stringify(videoSrcCandidatePayload));
                   }
               }
             }
@@ -97,56 +97,94 @@ export const extractM3U8Stream = (tmdbId, type, season, episode, onStreamFound, 
 
       // Override fetch to monitor for m3u8 requests
       window.fetch = async function(...args) {
-        const url = args[0];
-        const urlStr = url.toString();
-        
-        // Check if this is an m3u8 link
+        const urlStr = args[0].toString();
+        let actualReferer = null;
+        try {
+            const request = new Request(args[0], args[1]);
+            if (request.referrer && request.referrer !== 'about:client' && request.referrer !== '') {
+                actualReferer = request.referrer; // It's a URL
+            } else if (request.referrer === 'about:client') {
+                actualReferer = window.location.href; // Referrer is the client's URL (of the iframe/document making the call)
+            }
+            // If request.referrer is '', actualReferer remains null (no referrer policy)
+        } catch (e) {
+            // Fallback for safety, though Request constructor should be robust
+            if (args[1] && args[1].headers) {
+                const headers = new Headers(args[1].headers); // Normalize
+                if (headers.has('Referer')) {
+                    actualReferer = headers.get('Referer');
+                }
+            }
+        }
+        // window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'debug', message: '[WebViewJS] Fetch Intercept: URL=' + urlStr + ', Determined Referer=' + actualReferer }));
+
         if (urlStr.includes('.m3u8')) {
-          window.ReactNativeWebView.postMessage(JSON.stringify({
-            type: 'stream_candidate',
-            url: urlStr
-          }));
+          const fetchCandidatePayload = { type: 'stream_candidate', url: urlStr, referer: actualReferer };
+          window.ReactNativeWebView.postMessage(JSON.stringify(fetchCandidatePayload));
           
-          // If URL contains 'master' or 'playlist', it's likely the main playlist
           if (!mainM3u8Found && (urlStr.includes('master') || urlStr.includes('playlist'))) {
             mainM3u8Found = true;
-            window.ReactNativeWebView.postMessage(JSON.stringify({
-              type: 'stream',
-              url: urlStr
-            }));
-          } else if (!m3u8UrlsFound.includes(urlStr)) {
-            m3u8UrlsFound.push(urlStr);
+            const fetchStreamPayload = { type: 'stream', url: urlStr, referer: actualReferer };
+            window.ReactNativeWebView.postMessage(JSON.stringify(fetchStreamPayload));
+            streamFoundAndPosted = true;
+            if (domScanInterval) clearInterval(domScanInterval);
+          } else if (!m3u8UrlsFound.some(item => item.url === urlStr)) {
+            m3u8UrlsFound.push({ url: urlStr, referer: actualReferer });
           }
         }
-        
         return originalFetch.apply(this, args);
       };
 
       // Override XMLHttpRequest to monitor for m3u8 requests
       window.XMLHttpRequest = function() {
         const xhr = new originalXHR();
-        const originalOpen = xhr.open;
+        const _originalOpen = xhr.open;
+        const _originalSetRequestHeader = xhr.setRequestHeader;
+        const _originalSend = xhr.send;
         
+        let _urlForM3U8 = null;
+        let _capturedRefererHeader = null;
+
         xhr.open = function(method, url) {
           const urlStr = url.toString();
+          _capturedRefererHeader = null; // Reset for each request
           if (urlStr.includes('.m3u8')) {
-            window.ReactNativeWebView.postMessage(JSON.stringify({
-              type: 'stream_candidate',
-              url: urlStr
-            }));
-            
-            // If URL contains 'master' or 'playlist', it's likely the main playlist
-            if (!mainM3u8Found && (urlStr.includes('master') || urlStr.includes('playlist'))) {
-              mainM3u8Found = true;
-              window.ReactNativeWebView.postMessage(JSON.stringify({
-                type: 'stream',
-                url: urlStr
-              }));
-            } else if (!m3u8UrlsFound.includes(urlStr)) {
-              m3u8UrlsFound.push(urlStr);
-            }
+            _urlForM3U8 = urlStr;
+          } else {
+            _urlForM3U8 = null;
           }
-          return originalOpen.apply(this, arguments);
+          return _originalOpen.apply(this, arguments);
+        };
+
+        xhr.setRequestHeader = function(header, value) {
+            if (header.toLowerCase() === 'referer') {
+                _capturedRefererHeader = value;
+            }
+            return _originalSetRequestHeader.apply(this, arguments);
+        };
+        
+        xhr.send = function() {
+            if (_urlForM3U8) {
+                let refererForXhr = _capturedRefererHeader;
+                if (!refererForXhr && window.location && window.location.href && window.location.href !== 'about:blank') {
+                    refererForXhr = window.location.href;
+                }
+                // window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'debug', message: '[WebViewJS] XHR Intercept: URL=' + _urlForM3U8 + ', CapturedReferer=' + _capturedRefererHeader + ', EffectiveReferer=' + refererForXhr }));
+
+                const xhrCandidatePayload = { type: 'stream_candidate', url: _urlForM3U8, referer: refererForXhr };
+                window.ReactNativeWebView.postMessage(JSON.stringify(xhrCandidatePayload));
+
+                if (!mainM3u8Found && (_urlForM3U8.includes('master') || _urlForM3U8.includes('playlist'))) {
+                    mainM3u8Found = true;
+                    const xhrStreamPayload = { type: 'stream', url: _urlForM3U8, referer: refererForXhr };
+                    window.ReactNativeWebView.postMessage(JSON.stringify(xhrStreamPayload));
+                    streamFoundAndPosted = true;
+                    if (domScanInterval) clearInterval(domScanInterval);
+                } else if (!m3u8UrlsFound.some(item => item.url === _urlForM3U8)) {
+                    m3u8UrlsFound.push({ url: _urlForM3U8, referer: refererForXhr });
+                }
+            }
+            return _originalSend.apply(this, arguments);
         };
         
         return xhr;
@@ -172,7 +210,11 @@ export const extractM3U8Stream = (tmdbId, type, season, episode, onStreamFound, 
                       const url = args[0];
                       const urlStr = url.toString();
                       if (urlStr.includes('.m3u8')) {
-                        window.parent.postMessage({ type: 'stream', url: urlStr }, '*');
+                        // Basic iframe injection currently doesn't capture referer from within iframe's network requests
+                        const iframeFetchPayload = { type: 'stream', url: urlStr, referer: null };
+                        // Cannot use ReactNativeWebView.postMessage directly from iframe's injected script for debug.
+                        // Parent will log if it forwards.
+                        window.parent.postMessage(iframeFetchPayload, '*');
                       }
                       return originalFetch.apply(this, args);
                     };
@@ -183,7 +225,10 @@ export const extractM3U8Stream = (tmdbId, type, season, episode, onStreamFound, 
                       xhr.open = function(method, url) {
                         const urlStr = url.toString();
                         if (urlStr.includes('.m3u8')) {
-                          window.parent.postMessage({ type: 'stream', url: urlStr }, '*');
+                          // Basic iframe injection currently doesn't capture referer from within iframe's network requests
+                          const iframeXhrPayload = { type: 'stream', url: urlStr, referer: null };
+                           // Cannot use ReactNativeWebView.postMessage directly from iframe's injected script for debug.
+                          window.parent.postMessage(iframeXhrPayload, '*');
                         }
                         return originalOpen.apply(this, arguments);
                       };
@@ -203,68 +248,87 @@ export const extractM3U8Stream = (tmdbId, type, season, episode, onStreamFound, 
       // Handle messages from iframes
       window.addEventListener('message', function(event) {
         if (event.data && event.data.type === 'stream' && event.data.url) {
-          window.ReactNativeWebView.postMessage(JSON.stringify(event.data));
+          // window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'debug', message: '[WebViewJS] Message from iframe', payload: event.data }));
+          // Forward message from iframe. If iframe sends a referer, it will be in event.data.referer.
+          // Otherwise, event.data.referer will be undefined.
+          const iframeForwardPayload = {
+            type: 'stream',
+            url: event.data.url,
+            referer: event.data.referer !== undefined ? event.data.referer : null
+          };
+          window.ReactNativeWebView.postMessage(JSON.stringify(iframeForwardPayload));
+          // If an iframe directly provides a stream, consider it found.
+          if (!mainM3u8Found) { // Check if a main one isn't already found to avoid conflicts
+            mainM3u8Found = true; // Or handle based on iframe's stream quality if possible
+            streamFoundAndPosted = true;
+            if (domScanInterval) clearInterval(domScanInterval);
+          }
         }
       });
 
       // Attempt to search for m3u8 in the DOM periodically
-      setInterval(function() {
+      domScanInterval = setInterval(function() {
+        if (streamFoundAndPosted) {
+          clearInterval(domScanInterval);
+          return;
+        }
+
         // Check for videos and sources in main document
         const sources = document.querySelectorAll('source');
         const videos = document.querySelectorAll('video');
         
         // Check all video elements
         videos.forEach(video => {
-          if (video.src && video.src.includes('.m3u8') && !m3u8UrlsFound.includes(video.src)) {
-            m3u8UrlsFound.push(video.src);
-            window.ReactNativeWebView.postMessage(JSON.stringify({
-              type: 'stream',
-              url: video.src
-            }));
+          if (streamFoundAndPosted) return;
+          if (video.src && video.src.includes('.m3u8') && !m3u8UrlsFound.some(item => item.url === video.src)) {
+            m3u8UrlsFound.push({ url: video.src, referer: null }); // DOM source, no specific referer
+            // Don't post 'stream' directly from here if mainM3u8Found is false, let fallback logic handle it
+            // unless this is the *only* way it's found.
+            // For now, just add to candidates. The fallback logic below will pick it up.
+            //  window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'debug', message: '[WebViewJS] Adding DOM video to candidates', payload: {url: video.src} }));
           }
         });
         
         // Check all sources
         sources.forEach(source => {
-          if (source.src && source.src.includes('.m3u8') && !m3u8UrlsFound.includes(source.src)) {
-            m3u8UrlsFound.push(source.src);
-            window.ReactNativeWebView.postMessage(JSON.stringify({
-              type: 'stream',
-              url: source.src
-            }));
+          if (streamFoundAndPosted) return;
+          if (source.src && source.src.includes('.m3u8') && !m3u8UrlsFound.some(item => item.url === source.src)) {
+            m3u8UrlsFound.push({ url: source.src, referer: null }); // DOM source, no specific referer
+            // window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'debug', message: '[WebViewJS] Adding DOM source to candidates', payload: {url: source.src} }));
           }
         });
         
         // Check iframes
-        checkIframes();
+        if (!streamFoundAndPosted) checkIframes(); // checkIframes might set streamFoundAndPosted
         
-        // Send all found URLs if no master playlist was identified
-        if (m3u8UrlsFound.length > 0 && !mainM3u8Found) {
+        // Send all found URLs if no master playlist was identified yet by network interception
+        if (!streamFoundAndPosted && m3u8UrlsFound.length > 0 && !mainM3u8Found) {
           // Try to find the best quality stream (typically the longest URL)
-          let bestUrl = m3u8UrlsFound.sort((a, b) => b.length - a.length)[0];
-          window.ReactNativeWebView.postMessage(JSON.stringify({
-            type: 'stream',
-            url: bestUrl
-          }));
+          let bestItem = m3u8UrlsFound.sort((a, b) => b.url.length - a.url.length)[0];
+          const bestUrlPayload = { type: 'stream', url: bestItem.url, referer: bestItem.referer };
+          window.ReactNativeWebView.postMessage(JSON.stringify(bestUrlPayload));
           mainM3u8Found = true;
+          streamFoundAndPosted = true;
+          clearInterval(domScanInterval);
         }
-      }, 1000);
+      }, 1000); // Reduced interval for faster fallback if needed, was 1000
       
-      // Report if no stream found after 30 seconds
+      // Report if no stream found after 20 seconds
       setTimeout(function() {
+        if (streamFoundAndPosted) return;
+
         if (m3u8UrlsFound.length === 0) {
-          window.ReactNativeWebView.postMessage(JSON.stringify({
-            type: 'error',
-            message: 'No m3u8 stream found after timeout'
-          }));
-        } else if (!mainM3u8Found) {
-          // If we found some m3u8 URLs but didn't pick a main one yet, use the first one
-          window.ReactNativeWebView.postMessage(JSON.stringify({
-            type: 'stream',
-            url: m3u8UrlsFound[0]
-          }));
+          const timeoutErrorPayload = { type: 'error', message: 'No m3u8 stream found after timeout' };
+          window.ReactNativeWebView.postMessage(JSON.stringify(timeoutErrorPayload));
+        } else if (!mainM3u8Found) { // If we have candidates but no "main" one was decisively chosen
+          let bestItem = m3u8UrlsFound.sort((a, b) => b.url.length - a.url.length)[0];
+          const timeoutFallbackPayload = { type: 'stream', url: bestItem.url, referer: bestItem.referer };
+          window.ReactNativeWebView.postMessage(JSON.stringify(timeoutFallbackPayload));
+          mainM3u8Found = true; // Mark as found to prevent other logic from firing
+          streamFoundAndPosted = true;
         }
-      }, 20000);
+        if (domScanInterval) clearInterval(domScanInterval); // Clear interval on timeout too
+      }, 20000); // Keep overall timeout
       
       true;
     })();
@@ -294,23 +358,25 @@ export const extractM3U8Stream = (tmdbId, type, season, episode, onStreamFound, 
             try {
                 const data = JSON.parse(event.nativeEvent.data);
 
+                // Removed debug logs
                 if (data.type === 'stream' && data.url) {
-                    onStreamFound(data.url);
+                    // console.log('[StreamExtractor] Stream found by WebView JS:', data); // Kept for minimal success logging, can be removed
+                    onStreamFound(data.url, data.referer !== undefined ? data.referer : null);
                     done = true;
                 } else if (data.type === 'stream_candidate') {
-                    // Stream candidate found, could be logged or used for heuristics if needed
+                    // console.log('[StreamExtractor] Stream candidate from WebView JS:', data); // Kept for minimal logging, can be removed
                 } else if (data.type === 'error') {
-                    console.error('[StreamExtractor] Error from WebView JS:', data.message);
+                    // console.error('[StreamExtractor] Error from WebView JS:', data.message); // Kept for minimal error logging
                     onError(new Error(data.message));
                 }
             } catch (error) {
-                console.error('[StreamExtractor] Error parsing WebView message:', error);
+                // console.error('[StreamExtractor] Error parsing WebView message:', error);
                 onError(error);
             }
         },
         onError: (syntheticEvent) => {
             const { nativeEvent } = syntheticEvent;
-            console.error('[StreamExtractor] WebView onError (loading error):', nativeEvent);
+            // console.error('[StreamExtractor] WebView onError (loading error):', nativeEvent);
             // Don't immediately call onError for HTTP errors, let onHttpError handle it for potential manual intervention
             if (!nativeEvent.url || !nativeEvent.description?.includes("net::ERR_HTTP_RESPONSE_CODE_FAILURE")) {
                  onError(new Error(`WebView loading error: ${nativeEvent.description}`));
@@ -321,6 +387,7 @@ export const extractM3U8Stream = (tmdbId, type, season, episode, onStreamFound, 
             if (nativeEvent.statusCode === 403 && onManualInterventionRequired) {
                 onManualInterventionRequired(embedUrl); // Pass URL for context
             } else {
+                // console.error(`[StreamExtractor] WebView HTTP error: ${nativeEvent.statusCode} on ${nativeEvent.url}`);
                 onError(new Error(`WebView HTTP error: ${nativeEvent.statusCode} on ${nativeEvent.url}`));
             }
         }
