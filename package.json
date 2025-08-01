@@ -1,12 +1,12 @@
 {
   "name": "flux",
-  "version": "1.1.1",
-  "version-iteration": 5,
+  "version": "1.1.3",
+  "version-iteration": 7,
   "main": "index.js",
   "scripts": {
     "start": "expo start",
     "start:dev": "APP_VARIANT=development expo start",
-    "android": "APP_VARIANT=development expo run:android -d",
+    "android": "cd android && ./gradlew clean && cd .. && APP_VARIANT=development expo run:android -d",
     "ios": "APP_VARIANT=development expo run:ios -d",
     "web": "expo start --web"
   },
@@ -17,7 +17,7 @@
     "@react-navigation/native": "^7.1.6",
     "@react-navigation/stack": "^7.2.10",
     "axios": "^1.8.4",
-    "expo": "~52.0.46",
+    "expo": "~52.0.47",
     "expo-brightness": "~13.0.3",
     "expo-dev-client": "~5.0.19",
     "expo-linear-gradient": "~14.0.2",

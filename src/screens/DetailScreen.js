@@ -27,10 +27,22 @@ const DetailScreen = ({ route, navigation }) => {
   const [recommendations, setRecommendations] = useState([]);
   const [loadingRecommendations, setLoadingRecommendations] = useState(false);
   const flatListRef = useRef(null); // Ref for FlatList
+  const scrollViewRef = useRef(null);
   const [initialScrollDone, setInitialScrollDone] = useState(false); // To prevent multiple scrolls
+  const seasonListRef = useRef(null);
 
   const today = new Date();
-  today.setHours(0, 0, 0, 0); // Normalize today's date to compare with air_dates
+  // today.setHours(0, 0, 0, 0); // Normalize today's date to compare with air_dates
+
+  const isFutureDate = (airDateString) => {
+    if (!airDateString) return false;
+    const airDate = new Date(airDateString);
+    return airDate > today;
+    // Set hours to 0 to compare dates only, and account for timezone offset by using UTC dates
+    // const todayUTC = new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()));
+    // const airDateUTC = new Date(Date.UTC(airDate.getFullYear(), airDate.getMonth(), airDate.getDate()));
+    // return airDateUTC > todayUTC;
+  };
 
   useEffect(() => {
     const fetchDetails = async () => {
@@ -45,10 +57,12 @@ const DetailScreen = ({ route, navigation }) => {
 
         if (mediaType === 'tv') {
           const mediaDetails = await fetchTVShowDetails(mediaId);
+          // Keep seasons with season_number > 0, regardless of their air_date for now.
+          // Individual episodes will be checked.
           const validSeasons = mediaDetails.seasons
-            ? mediaDetails.seasons.filter(s => s.season_number > 0 && s.air_date && new Date(s.air_date) <= today)
+            ? mediaDetails.seasons.filter(s => s.season_number > 0)
             : [];
-          mediaDetails.seasons = validSeasons;
+          mediaDetails.seasons = validSeasons; // Update details with filtered seasons
           setDetails(mediaDetails);
 
           const progress = await getShowWatchProgress(mediaId);
@@ -78,10 +92,10 @@ const DetailScreen = ({ route, navigation }) => {
             // Check if this season is valid and released
             const seasonExists = validSeasons.some(s => s.season_number === seasonToLoad);
             if (!seasonExists) {
-                seasonToLoad = null; // Fallback if the season from progress isn't in validSeasons
+              seasonToLoad = null; // Fallback if the season from progress isn't in validSeasons
             }
           }
-          
+
           if (!seasonToLoad && validSeasons.length > 0) {
             seasonToLoad = validSeasons[0].season_number; // Default to first valid season
           }
@@ -89,9 +103,6 @@ const DetailScreen = ({ route, navigation }) => {
           if (seasonToLoad !== null) {
             setSelectedSeason(seasonToLoad);
             const seasonData = await fetchSeasonDetails(mediaId, seasonToLoad);
-            if (seasonData && seasonData.episodes) {
-              seasonData.episodes = seasonData.episodes.filter(ep => ep.air_date && new Date(ep.air_date) <= today);
-            }
             setSeasonDetails(seasonData);
           }
         } else {
@@ -114,7 +125,7 @@ const DetailScreen = ({ route, navigation }) => {
 
     fetchDetails();
 
-    return () => {};
+    return () => { };
   }, [mediaId, mediaType]);
 
   const handleSeasonChange = async (seasonNumber) => {
@@ -124,10 +135,6 @@ const DetailScreen = ({ route, navigation }) => {
       setDisplayedEpisodesCount(25);
       setInitialScrollDone(false); // Allow scrolling for newly selected season
       const seasonData = await fetchSeasonDetails(mediaId, seasonNumber);
-      // Filter episodes within the newly fetched season
-      if (seasonData && seasonData.episodes) {
-        seasonData.episodes = seasonData.episodes.filter(ep => ep.air_date && new Date(ep.air_date) <= today);
-      }
       setSeasonDetails(seasonData);
     } catch (error) {
       console.error('Error fetching season details:', error);
@@ -137,7 +144,7 @@ const DetailScreen = ({ route, navigation }) => {
     }
   };
 
-  const handleEpisodePress = (episode) => {
+  const handleEpisodePress = (episode, isUnreleased) => {
     navigation.replace('VideoPlayer', {
       mediaId: mediaId,
       mediaType: 'tv',
@@ -146,9 +153,10 @@ const DetailScreen = ({ route, navigation }) => {
       title: details.name,
       episodeTitle: episode.name,
       poster_path: details.poster_path,
+      air_date: episode.air_date,
     });
   };
-  
+
   const handlePlayMovie = () => {
     navigation.replace('VideoPlayer', {
       mediaId: mediaId,
@@ -172,7 +180,7 @@ const DetailScreen = ({ route, navigation }) => {
   const handleRecommendationPress = (item) => {
     // Navigate to the DetailScreen for the recommended item
     // Determine mediaType based on presence of title/name if not explicitly available
-    const recommendedMediaType = item.media_type || (item.title ? 'movie' : 'tv'); 
+    const recommendedMediaType = item.media_type || (item.title ? 'movie' : 'tv');
     navigation.push('DetailScreen', { // Use push to allow navigating to another detail screen
       mediaId: item.id,
       mediaType: recommendedMediaType,
@@ -195,24 +203,24 @@ const DetailScreen = ({ route, navigation }) => {
           }
         }
       }
-      
+
       if (mostRecentEpisodeNumber !== null) {
         const targetIndex = episodesToShow.findIndex(ep => ep.episode_number === mostRecentEpisodeNumber);
         if (targetIndex !== -1) {
-          // Check if the item is within the currently rendered items or if we need to load more
-          if (targetIndex < displayedEpisodesCount) {
-             flatListRef.current.scrollToIndex({
-              index: targetIndex,
+          if (targetIndex >= displayedEpisodesCount) {
+            setDisplayedEpisodesCount(targetIndex + 1);
+          }
+
+          setTimeout(() => {
+            const episodePositionInFlatList = targetIndex * 120;
+            const totalYPosition = 100 + episodePositionInFlatList - 50;
+
+            scrollViewRef.current?.scrollTo({
+              y: Math.max(0, totalYPosition), // Ensure we don't scroll to negative position
               animated: true,
-              viewPosition: 0.1, // Try to position it near the top
             });
             setInitialScrollDone(true);
-          } else {
-            // If the target episode is beyond the currently displayed ones,
-            // we might need to load more first, or decide not to scroll.
-            // For now, we'll only scroll if it's in the visible range.
-            // A more complex solution might involve loading more then scrolling.
-          }
+          }, 200);
         }
       } else {
         // No progress for this season, or no progress at all, don't scroll.
@@ -220,6 +228,22 @@ const DetailScreen = ({ route, navigation }) => {
       }
     }
   }, [seasonDetails, episodeProgress, episodesToShow, mediaType, initialScrollDone, selectedSeason, displayedEpisodesCount]);
+
+  useEffect(() => {
+    if (seasonListRef.current && details?.seasons && selectedSeason) {
+      const seasonIndex = details.seasons.findIndex(s => s.season_number === selectedSeason);
+      if (seasonIndex !== -1) {
+        // A short delay can help ensure the list has rendered before scrolling
+        setTimeout(() => {
+          seasonListRef.current.scrollToIndex({
+            index: seasonIndex,
+            animated: true,
+            viewPosition: 0.5, // Center the selected season
+          });
+        }, 200);
+      }
+    }
+  }, [details, selectedSeason]);
 
   // Modify the condition: Only show full-screen loader on initial load
   if (loading && !details) {
@@ -256,11 +280,15 @@ const DetailScreen = ({ route, navigation }) => {
     if (progress && progress.duration > 0) {
       progressPercent = (progress.position / progress.duration);
     }
+    const isUnreleased = isFutureDate(item.air_date);
 
     return (
-      <TouchableOpacity style={styles.episodeItem} onPress={() => handleEpisodePress(item)}>
+      <TouchableOpacity
+        style={styles.episodeItem}
+        onPress={() => handleEpisodePress(item, isUnreleased)}
+      >
         <View style={styles.episodeRow}>
-          <View style={styles.episodeImageContainer}>
+          <View style={[styles.episodeImageContainer, isUnreleased && styles.unreleasedEpisodeImageContainer]}>
             {item.still_path ? (
               <Image
                 source={{ uri: getImageUrl(item.still_path) }}
@@ -269,21 +297,23 @@ const DetailScreen = ({ route, navigation }) => {
             ) : (
               <View style={styles.episodeImagePlaceholder} />
             )}
+            {isUnreleased && (
+              <View style={styles.unreleasedBadgeDetailScreenContainer}>
+                <View style={styles.unreleasedBadgeDetailScreen}>
+                  <Text style={styles.unreleasedBadgeTextDetailScreen}>UNRELEASED</Text>
+                </View>
+              </View>
+            )}
             {progressPercent > 0 && progressPercent < 1 && (
               <View style={styles.progressBarContainer}>
                 <View style={[styles.progressBar, { width: `${progressPercent * 100}%` }]} />
               </View>
             )}
-             {progressPercent >= 1 && ( // Show checkmark if fully watched
-              <View style={styles.watchedOverlay}>
-                <Ionicons name="checkmark-circle" size={24} color="rgba(255, 255, 255, 0.8)" />
-              </View>
-            )}
           </View>
           <View style={styles.episodeInfo}>
             <Text style={styles.episodeNumber}>Episode {item.episode_number}</Text>
-            <Text style={styles.episodeTitle}>{item.name}</Text>
-            <Text style={styles.episodeOverview} numberOfLines={2}>
+            <Text style={[styles.episodeTitle, isUnreleased && styles.unreleasedEpisodeText]}>{item.name}</Text>
+            <Text style={[styles.episodeOverview, isUnreleased && styles.unreleasedEpisodeText]} numberOfLines={2}>
               {item.overview || 'No description available.'}
             </Text>
           </View>
@@ -293,18 +323,18 @@ const DetailScreen = ({ route, navigation }) => {
   };
 
   const renderRecommendation = ({ item }) => (
-    <MediaCard 
-      item={item} 
-      onPress={() => handleRecommendationPress(item)} 
+    <MediaCard
+      item={item}
+      onPress={() => handleRecommendationPress(item)}
       // Add specific styling for recommendations if needed, or use default MediaCard style
-      style={styles.recommendationCard} 
+      style={styles.recommendationCard}
     />
   );
 
   const displayTitle = mediaType === 'tv' ? details.name : details.title;
   const releaseDate = mediaType === 'tv' ? details.first_air_date : details.release_date;
   const releaseYear = releaseDate ? releaseDate.split('-')[0] : 'Unknown';
-  
+
   // Format runtime (for movies)
   const formatRuntime = (minutes) => {
     if (!minutes) return '';
@@ -312,21 +342,20 @@ const DetailScreen = ({ route, navigation }) => {
     const mins = minutes % 60;
     return `${hrs}h ${mins}m`;
   };
-  
+
   // Process genres
   const genresArray = details.genres && details.genres.length > 0
     ? details.genres.map(genre => genre.name)
     : [];
 
-  // Ensure episodes are filtered by air_date before slicing for display
-  const allReleasedEpisodesInSeason = seasonDetails?.episodes?.filter(ep => ep.air_date && new Date(ep.air_date) <= today) || [];
-  const episodesToShow = allReleasedEpisodesInSeason.slice(0, displayedEpisodesCount);
-  const totalReleasedEpisodesInSeason = allReleasedEpisodesInSeason.length;
-  const showLoadMoreButton = totalReleasedEpisodesInSeason > displayedEpisodesCount;
+  const allEpisodesInSeason = seasonDetails?.episodes || [];
+  const episodesToShow = allEpisodesInSeason.slice(0, displayedEpisodesCount);
+  const totalEpisodesInSeason = allEpisodesInSeason.length; // Total, including future ones
+  const showLoadMoreButton = totalEpisodesInSeason > displayedEpisodesCount;
 
   return (
     <SafeAreaView style={styles.container} edges={[]}>
-      <ScrollView showsVerticalScrollIndicator={false}>
+      <ScrollView ref={scrollViewRef} showsVerticalScrollIndicator={false}>
         <View style={styles.headerContainer}>
           {details.backdrop_path ? (
             <Image
@@ -360,14 +389,14 @@ const DetailScreen = ({ route, navigation }) => {
                   {details.number_of_seasons} {details.number_of_seasons > 1 ? 'Seasons' : 'Season'}
                 </Text>
               )}
-              
+
               {mediaType === 'movie' && details.runtime && (
                 <Text style={styles.runtime}>
                   {formatRuntime(details.runtime)}
                 </Text>
               )}
             </View>
-            
+
             {genresArray.length > 0 ? (
               <View style={styles.genreBadgeContainer}>
                 {genresArray.map((genre, index) => (
@@ -377,7 +406,7 @@ const DetailScreen = ({ route, navigation }) => {
                 ))}
               </View>
             ) : null}
-            
+
             {mediaType === 'movie' && (
               <TouchableOpacity style={styles.playButton} onPress={handlePlayMovie}>
                 <Ionicons name="play" size={18} color="#000" />
@@ -397,10 +426,30 @@ const DetailScreen = ({ route, navigation }) => {
           <>
             <View style={styles.seasonsContainer}>
               <View style={styles.seasonsScrollViewContainer}>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.seasonsScrollContent}>
-                  {/* Seasons are already filtered in useEffect and mediaDetails.seasons is updated */}
-                  {details.seasons && details.seasons.map(season => renderSeasonButton(season.season_number))}
-                </ScrollView>
+                <FlatList
+                  ref={seasonListRef}
+                  horizontal
+                  data={details.seasons || []}
+                  renderItem={({ item }) => renderSeasonButton(item.season_number)}
+                  keyExtractor={(item) => `season-${item.id}`}
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.seasonsScrollContent}
+                  getItemLayout={(data, index) => ({
+                    length: 130, // Approximate width of a season button
+                    offset: 130 * index,
+                    index,
+                  })}
+                  onScrollToIndexFailed={info => {
+                    // Fallback for when layout isn't ready
+                    const wait = new Promise(resolve => setTimeout(resolve, 200));
+                    wait.then(() => {
+                      seasonListRef.current?.scrollToOffset({
+                        offset: info.averageItemLength * info.index,
+                        animated: true,
+                      });
+                    });
+                  }}
+                />
                 <LinearGradient
                   colors={['#000', 'transparent']}
                   style={[styles.scrollGradient, styles.scrollGradientLeft]}
@@ -432,8 +481,8 @@ const DetailScreen = ({ route, navigation }) => {
                   {episodesToShow.length > 0 ? (
                     <>
                       <Text style={styles.sectionTitle}>
-                        Season {selectedSeason} • {totalReleasedEpisodesInSeason}{' '}
-                        {totalReleasedEpisodesInSeason === 1 ? 'Episode' : 'Episodes'}
+                        Season {selectedSeason} • {totalEpisodesInSeason}{' '}
+                        {totalEpisodesInSeason === 1 ? 'Episode' : 'Episodes'}
                       </Text>
                       <FlatList
                         ref={flatListRef}
@@ -444,9 +493,9 @@ const DetailScreen = ({ route, navigation }) => {
                         initialNumToRender={displayedEpisodesCount}
                         getItemLayout={(data, index) => {
                           const itemHeight = (styles.episodeImageContainer?.height || 70) +
-                                           (styles.episodeItem?.paddingBottom || 0) +
-                                           (styles.episodeItem?.borderBottomWidth || 0) +
-                                           (styles.episodeItem?.marginBottom || 0);
+                            (styles.episodeItem?.paddingBottom || 0) +
+                            (styles.episodeItem?.borderBottomWidth || 0) +
+                            (styles.episodeItem?.marginBottom || 0);
                           return { length: itemHeight, offset: itemHeight * index, index };
                         }}
                       />
@@ -460,15 +509,15 @@ const DetailScreen = ({ route, navigation }) => {
                       )}
                     </>
                   ) : (
-                     <Text style={styles.noEpisodesText}>No released episodes found for this season.</Text>
+                    <Text style={styles.noEpisodesText}>No episodes found for this season.</Text>
                   )}
                 </>
               )}
               {!loading && !seasonDetails && (!details.seasons || details.seasons.length === 0) && (
-                 <Text style={styles.noEpisodesText}>No released seasons available for this show yet.</Text>
+                <Text style={styles.noEpisodesText}>No seasons available for this show yet.</Text>
               )}
               {!loading && !seasonDetails && details.seasons && details.seasons.length > 0 && !selectedSeason && (
-                 <Text style={styles.noEpisodesText}>Select a season to view episodes.</Text>
+                <Text style={styles.noEpisodesText}>Select a season to view episodes.</Text>
               )}
             </View>
           </>
@@ -476,50 +525,50 @@ const DetailScreen = ({ route, navigation }) => {
 
         {mediaType === 'movie' && (
           ((details.credits && details.credits.cast && details.credits.cast.length > 0) || recommendations.length > 0 || loadingRecommendations) ? (
-          <>
-            {/* Cast Section */}
-            {details.credits && details.credits.cast && details.credits.cast.length > 0 && (
-              <View style={styles.castSection}>
-                <Text style={styles.sectionTitle}>Cast</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.castScrollView}>
-                  {details.credits.cast.slice(0, 15).map(actor => (
-                    <View key={`actor-${actor.id}`} style={styles.castMember}>
-                      {actor.profile_path ? (
-                        <Image 
-                          source={{ uri: getImageUrl(actor.profile_path) }}
-                          style={styles.castImage}
-                        />
-                      ) : (
-                        <View style={styles.castImagePlaceholder}>
-                          <Ionicons name="person" size={30} color="#666" />
-                        </View>
-                      )}
-                      <Text style={styles.castName} numberOfLines={1}>{actor.name}</Text>
-                      <Text style={styles.castCharacter} numberOfLines={1}>{actor.character}</Text>
-                    </View>
-                  ))}
-                </ScrollView>
-              </View>
-            )}
-            {recommendations.length > 0 && (
-              <View style={styles.recommendationsSection}>
-                <Text style={styles.sectionTitle}>More Like This</Text>
-                <FlatList
-                  horizontal
-                  data={recommendations}
-                  renderItem={renderRecommendation}
-                  keyExtractor={(item) => `rec-${item.id}`}
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.recommendationsList}
-                />
-              </View>
-            )}
-            {loadingRecommendations && (
-              <View style={styles.loadingRecommendationsContainer}>
-                <ActivityIndicator size="small" color="#E50914" />
-              </View>
-            )}
-          </>
+            <>
+              {/* Cast Section */}
+              {details.credits && details.credits.cast && details.credits.cast.length > 0 && (
+                <View style={styles.castSection}>
+                  <Text style={styles.sectionTitle}>Cast</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.castScrollView}>
+                    {details.credits.cast.slice(0, 15).map(actor => (
+                      <View key={`actor-${actor.id}`} style={styles.castMember}>
+                        {actor.profile_path ? (
+                          <Image
+                            source={{ uri: getImageUrl(actor.profile_path) }}
+                            style={styles.castImage}
+                          />
+                        ) : (
+                          <View style={styles.castImagePlaceholder}>
+                            <Ionicons name="person" size={30} color="#666" />
+                          </View>
+                        )}
+                        <Text style={styles.castName} numberOfLines={1}>{actor.name}</Text>
+                        <Text style={styles.castCharacter} numberOfLines={1}>{actor.character}</Text>
+                      </View>
+                    ))}
+                  </ScrollView>
+                </View>
+              )}
+              {recommendations.length > 0 && (
+                <View style={styles.recommendationsSection}>
+                  <Text style={styles.sectionTitle}>More Like This</Text>
+                  <FlatList
+                    horizontal
+                    data={recommendations}
+                    renderItem={renderRecommendation}
+                    keyExtractor={(item) => `rec-${item.id}`}
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={styles.recommendationsList}
+                  />
+                </View>
+              )}
+              {loadingRecommendations && (
+                <View style={styles.loadingRecommendationsContainer}>
+                  <ActivityIndicator size="small" color="#E50914" />
+                </View>
+              )}
+            </>
           ) : null
         )}
       </ScrollView>
@@ -865,6 +914,32 @@ const styles = StyleSheet.create({
   loadingRecommendationsContainer: {
     paddingVertical: 20,
     alignItems: 'center',
+  },
+  // Styles for Unreleased Badge on DetailScreen
+  unreleasedEpisodeImageContainer: {
+
+  },
+  unreleasedBadgeDetailScreenContainer: {
+    position: 'absolute',
+    top: 4, // Adjust position as needed
+    right: 4,
+    zIndex: 1,
+  },
+  unreleasedBadgeDetailScreen: {
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    borderRadius: 3,
+    borderColor: 'white',
+    borderWidth: 1,
+  },
+  unreleasedBadgeTextDetailScreen: {
+    color: 'white',
+    fontSize: 9,
+    fontWeight: 'bold',
+  },
+  unreleasedEpisodeText: {
+    opacity: 1,
   },
 });
 

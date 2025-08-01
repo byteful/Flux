@@ -12,14 +12,16 @@ const SUBTITLES_ENABLED_KEY = 'subtitlesEnabled'; // New key for enabled state
 
 // --- Stream Source Order ---
 const STREAM_SOURCE_ORDER_KEY = 'streamSourceOrder';
+const STREAM_SOURCE_SIGNATURE_KEY = 'streamSourceSignature';
 
 // Define default sources here, so it's accessible by other modules if needed
 // This should match the `name` property of the sources in vidsrcApi.js
 // Also include defaultBaseUrl which will be used by vidsrcApi.js if a source is newly added.
 export const DEFAULT_STREAM_SOURCES = [
+  { name: 'vidsrc.cc', timeoutInSeconds: 10, type: 'direct', defaultBaseUrl: 'https://vidsrc.cc/v3/embed' },
+  { name: 'vidsrc.su', timeoutInSeconds: 10, type: 'direct', defaultBaseUrl: 'https://vidsrc.su/embed' },
   { name: 'hexa.watch', timeoutInSeconds: 10, type: 'direct', defaultBaseUrl: 'https://hexa.watch/watch' },
   { name: 'embed.su', timeoutInSeconds: 10, type: 'direct', defaultBaseUrl: 'https://embed.su/embed' },
-  { name: 'vidsrc.su', timeoutInSeconds: 10, type: 'direct', defaultBaseUrl: 'https://vidsrc.su/embed' }
   // Add other sources here with their default properties if they are introduced
 ];
 
@@ -95,7 +97,7 @@ export const getShowWatchProgress = async (mediaId) => {
     const keys = await AsyncStorage.getAllKeys();
     const episodeProgressKeys = keys.filter(key => key.startsWith(`${EPISODE_PROGRESS_KEY_PREFIX}tv_${mediaId}_`));
     const progressEntries = await AsyncStorage.multiGet(episodeProgressKeys);
-    
+
     const showProgress = {};
     progressEntries.forEach(([key, value]) => {
       if (value) {
@@ -119,7 +121,7 @@ export const getContinueWatchingList = async () => {
   try {
     const watchDataString = await AsyncStorage.getItem(CONTINUE_WATCHING_KEY);
     const watchData = watchDataString ? JSON.parse(watchDataString) : {};
-    
+
     // The key in watchData is now the mediaId
     return Object.entries(watchData)
       .map(([mediaId, data]) => ({
@@ -140,7 +142,7 @@ export const removeFromContinueWatching = async (mediaId) => {
   try {
     const watchDataString = await AsyncStorage.getItem(CONTINUE_WATCHING_KEY);
     const watchData = watchDataString ? JSON.parse(watchDataString) : {};
-    
+
     delete watchData[mediaId];
     await AsyncStorage.setItem(CONTINUE_WATCHING_KEY, JSON.stringify(watchData));
     return true;
@@ -386,8 +388,25 @@ export const saveStreamSourceOrder = async (sourceOrder) => {
 
 export const getStreamSourceOrder = async () => {
   try {
-    const storedOrderJson = await AsyncStorage.getItem(STREAM_SOURCE_ORDER_KEY);
-    let effectiveOrder = [...DEFAULT_STREAM_SOURCES.map(s => ({...s}))]; // Start with a deep copy of defaults
+    // Create a signature of the current default sources to detect updates
+    const defaultSourceSignature = JSON.stringify(DEFAULT_STREAM_SOURCES.map(s => s.name));
+    const storedSignature = await AsyncStorage.getItem(STREAM_SOURCE_SIGNATURE_KEY);
+
+    let storedOrderJson = null;
+
+    // If the signature has changed, it means the default list was updated.
+    // In this case, we reset the user's stored order to the new defaults.
+    if (defaultSourceSignature !== storedSignature) {
+      console.log('[Storage] Default stream sources have changed. Resetting user order to new defaults.');
+      await AsyncStorage.removeItem(STREAM_SOURCE_ORDER_KEY);
+      await AsyncStorage.setItem(STREAM_SOURCE_SIGNATURE_KEY, defaultSourceSignature);
+      // storedOrderJson remains null, so the logic below will use the new defaults.
+    } else {
+      // Signatures match, so we can safely load the user's custom order.
+      storedOrderJson = await AsyncStorage.getItem(STREAM_SOURCE_ORDER_KEY);
+    }
+
+    let effectiveOrder = [...DEFAULT_STREAM_SOURCES.map(s => ({ ...s }))]; // Start with a deep copy of defaults
 
     if (storedOrderJson) {
       const storedOrder = JSON.parse(storedOrderJson);
@@ -395,13 +414,10 @@ export const getStreamSourceOrder = async () => {
       const orderedFromStorage = storedOrder.map(storedSource => {
         const defaultDetail = DEFAULT_STREAM_SOURCES.find(ds => ds.name === storedSource.name);
         if (defaultDetail) {
-          // Merge: take name from stored (it's the key), timeout from stored if present, else from default.
-          // type and defaultBaseUrl always come from default.
+          // Merge stored order with default details to ensure consistency
           return {
-            name: storedSource.name,
-            timeoutInSeconds: storedSource.timeoutInSeconds !== undefined ? storedSource.timeoutInSeconds : defaultDetail.timeoutInSeconds,
-            type: defaultDetail.type,
-            defaultBaseUrl: defaultDetail.defaultBaseUrl
+            ...defaultDetail, // Start with all default properties
+            name: storedSource.name, // The name is the key identifier
           };
         }
         return null; // This source from storage is no longer in defaults
@@ -411,13 +427,15 @@ export const getStreamSourceOrder = async () => {
       const newSources = DEFAULT_STREAM_SOURCES.filter(defaultSource =>
         !orderedFromStorage.some(os => os.name === defaultSource.name)
       );
-      
-      effectiveOrder = [...orderedFromStorage, ...newSources.map(s => ({...s}))];
+
+      effectiveOrder = [...orderedFromStorage, ...newSources.map(s => ({ ...s }))];
     }
+
     return effectiveOrder;
+
   } catch (error) {
     console.error('Error getting stream source order:', error);
-    return [...DEFAULT_STREAM_SOURCES.map(s => ({...s}))]; // Return a deep copy on error
+    return [...DEFAULT_STREAM_SOURCES.map(s => ({ ...s }))]; // Return a deep copy on error
   }
 };
 // --- End Stream Source Order ---

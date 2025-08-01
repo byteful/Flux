@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -20,6 +20,7 @@ import { saveSearchQuery, getSearchHistory, removeSearchQuery, clearSearchHistor
 
 const SearchScreen = ({ navigation }) => {
   const [query, setQuery] = useState('');
+  const [lastUsedQuery, setLastUsedQuery] = useState('');
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const [noResults, setNoResults] = useState(false);
@@ -27,6 +28,10 @@ const SearchScreen = ({ navigation }) => {
   const [showHistory, setShowHistory] = useState(true);
   const [listVersion, setListVersion] = useState(0); // Added for FlatList refresh
   const opacity = useSharedValue(0);
+  
+  const debounceTimeout = useRef(null);
+  const currentSearchQuery = useRef('');
+  const skipDebounce = useRef(false);
 
   const animatedStyle = useAnimatedStyle(() => {
     return {
@@ -45,15 +50,40 @@ const SearchScreen = ({ navigation }) => {
     }, [opacity])
   );
 
-  // useEffect to handle showing/hiding history based on query changes
-  // This runs after the initial setup by useFocusEffect
+  // useEffect to handle debounced search as user types
   useEffect(() => {
+    // Skip debounced search if we're setting query programmatically
+    if (skipDebounce.current) {
+      skipDebounce.current = false;
+      return;
+    }
+
     if (!query.trim()) {
       setShowHistory(true);
-      loadSearchHistory(); // Ensure history is fresh when input is empty
-    } else {
-      setShowHistory(false);
+      setResults([]);
+      setNoResults(false);
+      loadSearchHistory();
+      return;
     }
+
+    setShowHistory(false);
+
+    // Clear previous timeout
+    if (debounceTimeout.current) {
+      clearTimeout(debounceTimeout.current);
+    }
+
+    // Set new timeout for debounced search
+    debounceTimeout.current = setTimeout(() => {
+      performSearch(query, false); // false means don't save to history
+    }, 500); // 500ms delay
+
+    // Cleanup timeout on unmount or dependency change
+    return () => {
+      if (debounceTimeout.current) {
+        clearTimeout(debounceTimeout.current);
+      }
+    };
   }, [query]);
 
   const loadSearchHistory = async () => {
@@ -61,23 +91,30 @@ const SearchScreen = ({ navigation }) => {
     setSearchHistory(history);
   };
 
-  const handleSearch = async (searchQuery = query) => {
+  const performSearch = async (searchQuery, saveToHistory = true) => {
+    setLastUsedQuery(searchQuery);
     const trimmedQuery = searchQuery.trim();
     if (!trimmedQuery) {
       setResults([]);
       setNoResults(false);
       setShowHistory(true);
-      loadSearchHistory(); // Refresh history view
+      loadSearchHistory();
       return;
     }
 
+    // Store the current query to prevent race conditions
+    currentSearchQuery.current = trimmedQuery;
     setLoading(true);
     setNoResults(false);
-    setShowHistory(false); // Hide history when a search is performed
+    setShowHistory(false);
 
     try {
-      await saveSearchQuery(trimmedQuery); // Save successful search
       const searchResults = await searchMedia(trimmedQuery);
+      
+      // Check if this is still the current search query (prevent race conditions)
+      if (currentSearchQuery.current !== trimmedQuery) {
+        return;
+      }
 
       const filteredResults = searchResults.filter(
         (item) =>
@@ -87,25 +124,37 @@ const SearchScreen = ({ navigation }) => {
 
       setResults(filteredResults);
       setNoResults(filteredResults.length === 0);
+
+      // Only save to history when explicitly requested (on enter press)
+      if (saveToHistory) {
+        await saveSearchQuery(trimmedQuery);
+        loadSearchHistory();
+      }
     } catch (error) {
       console.error('Search error:', error);
-      setResults([]);
-      setNoResults(true);
+      // Only update results if this is still the current search
+      if (currentSearchQuery.current === trimmedQuery) {
+        setResults([]);
+        setNoResults(true);
+      }
     } finally {
-      setLoading(false);
-      loadSearchHistory(); // Refresh history list after search
+      // Only update loading if this is still the current search
+      if (currentSearchQuery.current === trimmedQuery) {
+        setLoading(false);
+      }
     }
+  };
+
+  const handleSearch = () => {
+    if (query && lastUsedQuery && query === lastUsedQuery) {
+      return;
+    }
+    performSearch(query, true); // true means save to history
   };
 
   const handleQueryChange = (text) => {
     setQuery(text);
-    // The useEffect above will handle setShowHistory and loadSearchHistory
-    // based on the new query value.
-    // We still need to clear results if text becomes empty here.
-    if (!text.trim()) {
-      setResults([]);
-      setNoResults(false);
-    }
+    // The useEffect will handle the debounced search automatically
   };
 
   const handleClearInput = () => {
@@ -164,8 +213,15 @@ const SearchScreen = ({ navigation }) => {
   };
 
   const handleHistoryItemPress = (historyQuery) => {
+    // Clear any pending debounced search
+    if (debounceTimeout.current) {
+      clearTimeout(debounceTimeout.current);
+    }
+    
+    // Set flag to skip the debounced useEffect
+    skipDebounce.current = true;
     setQuery(historyQuery);
-    handleSearch(historyQuery); // Pass the query directly
+    performSearch(historyQuery, true); // Save to history when selecting from history
   };
 
   const handleRemoveHistoryItem = async (historyQuery) => {
@@ -205,7 +261,7 @@ const SearchScreen = ({ navigation }) => {
             placeholderTextColor="#888"
             value={query}
             onChangeText={handleQueryChange}
-            onSubmitEditing={() => handleSearch()}
+            onBlur={() => handleSearch()}
             returnKeyType="search"
             autoFocus
             clearButtonMode="always"

@@ -62,8 +62,20 @@ const VideoPlayerScreen = ({ route }) => {
     episode,
     title,
     episodeTitle,
-    poster_path // Ensure poster_path is passed for next episode data
+    poster_path,
+    air_date: currentEpisodeAirDateFromParams,
   } = route.params;
+
+  const isFutureDate = (airDateString) => {
+    if (!airDateString) return false;
+    const airDate = new Date(airDateString);
+    const today = new Date();
+    return airDate > today;
+    // Set hours to 0 to compare dates only, and account for timezone offset by using UTC dates
+    // const todayUTC = new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()));
+    // const airDateUTC = new Date(Date.UTC(airDate.getFullYear(), airDate.getMonth(), airDate.getDate()));
+    // return airDateUTC > todayUTC;
+  };
 
   // --- Pinch to Zoom States ---
   const [isZoomed, setIsZoomed] = useState(false); // Restored original setter
@@ -217,7 +229,9 @@ const VideoPlayerScreen = ({ route }) => {
     }
 
     headers['Origin'] = originToUse;
-    headers['Referer'] = refererToUse;
+    if (refererToUse && videoUrl && !videoUrl.includes("fleurixsun.xyz")) { // hard coded this in cause it was just tweaking and i didnt feel like writing a whole detection system for this edge case
+      headers['Referer'] = refererToUse;
+    }
 
     return headers;
   }, [streamReferer, videoUrl]); // Depend on streamReferer and videoUrl
@@ -377,9 +391,10 @@ const VideoPlayerScreen = ({ route }) => {
       }
       if (nextSe !== null && nextEp !== null) {
         let episodeName = `Episode ${nextEp}`;
+        let nextEpisodeData;
         try {
           const nextSeasonFullDetails = await fetchSeasonDetails(mediaId, nextSe);
-          const nextEpisodeData = nextSeasonFullDetails?.episodes?.find(e => e.episode_number === nextEp);
+          nextEpisodeData = nextSeasonFullDetails?.episodes?.find(e => e.episode_number === nextEp);
           if (nextEpisodeData?.name) {
             episodeName = nextEpisodeData.name;
           }
@@ -394,6 +409,7 @@ const VideoPlayerScreen = ({ route }) => {
           title: title,
           episodeTitle: episodeName,
           poster_path: poster_path,
+          air_date: nextEpisodeData?.air_date,
         };
         nextEpisodeDetailsRef.current = nextDetails;
         setShowNextEpisodeButton(true);
@@ -754,6 +770,7 @@ const VideoPlayerScreen = ({ route }) => {
 
   const handleSelectSeasonForModal = async (selectedSeasonNumber) => {
     setSelectedSeasonForModal(selectedSeasonNumber);
+    setInitialModalScrollDone(false); // Reset scroll flag when changing seasons
     const seasonData = allSeasonsData.find(s => s.season_number === selectedSeasonNumber);
     if (seasonData) {
       // Check if episodes already have progress, if not, fetch them (or re-fetch)
@@ -771,6 +788,51 @@ const VideoPlayerScreen = ({ route }) => {
       setEpisodesForModal([]);
     }
   };
+  // Scroll to current season when modal opens
+  useEffect(() => {
+    if (showEpisodesModal && allSeasonsData.length > 0 && selectedSeasonForModal && seasonListModalRef.current) {
+      const seasonIndex = allSeasonsData.findIndex(s => s.season_number === selectedSeasonForModal);
+      if (seasonIndex !== -1) {
+        setTimeout(() => {
+          seasonListModalRef.current?.scrollToIndex({
+            index: seasonIndex,
+            animated: true,
+            viewPosition: 0.5, // Center the selected season
+          });
+        }, 200);
+      }
+    }
+  }, [showEpisodesModal, allSeasonsData, selectedSeasonForModal]);
+
+  // Scroll to current episode when episodes are loaded
+  useEffect(() => {
+    if (showEpisodesModal && !initialModalScrollDone && episodesForModal.length > 0 && episodeListModalRef.current) {
+      const currentEpisodeIndex = episodesForModal.findIndex(ep => 
+        ep.season_number === season && ep.episode_number === episode
+      );
+      
+      if (currentEpisodeIndex !== -1) {
+        setTimeout(() => {
+          episodeListModalRef.current?.scrollToIndex({
+            index: currentEpisodeIndex,
+            animated: true,
+            viewPosition: 0.5, // Center the current episode
+          });
+          setInitialModalScrollDone(true);
+        }, 300);
+      } else {
+        setInitialModalScrollDone(true);
+      }
+    }
+  }, [showEpisodesModal, episodesForModal, season, episode, initialModalScrollDone]);
+
+  // Reset scroll flag when modal closes
+  useEffect(() => {
+    if (!showEpisodesModal) {
+      setInitialModalScrollDone(false);
+    }
+  }, [showEpisodesModal]);
+
   // --- End Episodes Viewer Modal Logic ---
 
   
@@ -810,6 +872,11 @@ const VideoPlayerScreen = ({ route }) => {
     // --- End Subtitles Modal Logic ---
   // --- Listener Handlers ---
   const lastSaveTimeRef = useRef(0);
+  
+  // Refs for episode modal scrolling
+  const seasonListModalRef = useRef(null);
+  const episodeListModalRef = useRef(null);
+  const [initialModalScrollDone, setInitialModalScrollDone] = useState(false);
 
   const handlePositionChange = (event) => {
     const currentEventTime = typeof event === 'number' ? event : event?.currentTime;
@@ -1040,7 +1107,7 @@ const VideoPlayerScreen = ({ route }) => {
     setLoading(true);
     // Ensure getStreamHeaders is called here to get the latest headers
     // based on potentially updated streamReferer state.
-    player.replace({ uri: videoUrl, headers: getStreamHeaders() });
+    //player.replaceAsync({ uri: videoUrl, headers: getStreamHeaders() });
 
     const playTimer = setTimeout(() => {
       if (isUnmounting || !player) return;
@@ -1110,9 +1177,9 @@ const VideoPlayerScreen = ({ route }) => {
           if (!isMounted || streamExtractionComplete) {
             return;
           }
-          const processedUrl = Platform.OS === 'ios' ? streamUrl.replace('http://', 'https://') : streamUrl;
-          saveStreamUrl(contentId, processedUrl, referer, sourceName); // Save referer and sourceName
-          setVideoUrl(processedUrl);
+          saveStreamUrl(contentId, streamUrl, referer, sourceName); // Save referer and sourceName
+          setVideoUrl(streamUrl);
+          player.uri = streamUrl;
           setStreamReferer(referer);
           setCurrentPlayingSourceName(sourceName);
           setStreamExtractionComplete(true);
@@ -1132,7 +1199,18 @@ const VideoPlayerScreen = ({ route }) => {
         // onAllSourcesFailed: (finalError) => void
         (finalError) => {
           if (!isMounted) return;
-          setError({ message: `All sources failed: ${finalError.message}` });
+
+          if (currentEpisodeAirDateFromParams && isFutureDate(currentEpisodeAirDateFromParams)) {
+            const formattedAirDate = new Date(currentEpisodeAirDateFromParams).toLocaleDateString(undefined, {
+              month: 'long', day: 'numeric', year: 'numeric'
+            });
+            setError({
+              message: `This episode (${episodeTitle || `S${season}E${episode}`}) is scheduled to air on ${formattedAirDate}. Streaming sources are typically unavailable until after the air date.`,
+              isUnreleased: true
+            });
+          } else {
+            setError({ message: `All sources failed: ${finalError.message || 'Could not find a playable stream.'}` });
+          }
           setStreamExtractionComplete(true); // Mark as complete to stop further attempts
           setLoading(false);
           setIsInitialLoading(false);
@@ -1285,13 +1363,15 @@ const VideoPlayerScreen = ({ route }) => {
         return;
       }
 
-      const processedUrl = Platform.OS === 'ios' ? streamUrl.replace('http://', 'https://') : streamUrl;
-      saveStreamUrl(contentId, processedUrl, referer, sourceName);
+      saveStreamUrl(contentId, streamUrl, referer, sourceName);
       
       setStreamReferer(referer);
       setCurrentPlayingSourceName(sourceName);
       setResumeTime(currentPositionToResume);
-      setVideoUrl(processedUrl); // This triggers the useEffect to replace source and play
+      setVideoUrl(streamUrl); // This triggers the useEffect to replace source and play
+      setCurrentPlayingSourceName(sourceName);
+      setResumeTime(currentPositionToResume);
+      setVideoUrl(streamUrl); // This triggers the useEffect to replace source and play
 
       setStreamExtractionComplete(true);
       setManualWebViewVisible(false);
@@ -1485,16 +1565,17 @@ const VideoPlayerScreen = ({ route }) => {
           // Use a slight delay to allow orientation change to settle
           setTimeout(() => {
             try {
-              if (navRef.canGoBack()) {
-                navRef.goBack();
-              } else {
-                // If cannot go back (e.g., deep link), navigate to a default screen
-                navRef.navigate('Home');
-              }
+              navRef.replace('DetailScreen', { mediaId: mediaId, mediaType: mediaType, title: title });
+              // if (navRef.canGoBack()) {
+              //   navRef.goBack();
+              // } else {
+              //   // If cannot go back (e.g., deep link), navigate to a default screen
+              //   navRef.navigate('Home');
+              // }
             } catch (e) {
               console.error("Navigation error:", e);
               // Fallback navigation if goBack fails unexpectedly
-              try { navRef.navigate('Home'); } catch (e2) { }
+              try { navRef.replace('Home'); } catch (e2) { }
             }
           }, 300);
         });
@@ -1779,10 +1860,14 @@ const renderEpisodesModal = () => {
 
     const isCurrentEpisode = season === episodeData.season_number && episode === episodeData.episode_number;
     const runtimeString = formatRuntime(episodeData.runtime);
+    const isEpisodeUnreleased = isFutureDate(episodeData.air_date);
 
     return (
       <TouchableOpacity
-        style={[styles.episodeItemHorizontal, isCurrentEpisode && styles.currentEpisodeItemHorizontal]}
+        style={[
+          styles.episodeItemHorizontal,
+          isCurrentEpisode && styles.currentEpisodeItemHorizontal
+        ]}
         onPress={() => {
           if (isCurrentEpisode) {
             setShowEpisodesModal(false);
@@ -1798,6 +1883,7 @@ const renderEpisodesModal = () => {
             title: title,
             episodeTitle: episodeData.name,
             poster_path: poster_path,
+            air_date: episodeData.air_date,
           });
         }}
       >
@@ -1809,12 +1895,19 @@ const renderEpisodesModal = () => {
               <Ionicons name="image-outline" size={40} color="#555" />
             </View>
           )}
-          {progressPercent > 0 && progressPercent < 1 && (
+          {isEpisodeUnreleased && (
+            <View style={styles.unreleasedBadgeContainer}>
+              <View style={styles.unreleasedBadge}>
+                <Text style={styles.unreleasedBadgeText}>UNRELEASED</Text>
+              </View>
+            </View>
+          )}
+          {progressPercent > 0 && progressPercent < 1 && !isEpisodeUnreleased && (
             <View style={styles.episodeProgressOverlayHorizontal}>
               <View style={[styles.episodeProgressBarHorizontal, { width: `${progressPercent * 100}%` }]} />
             </View>
           )}
-          {progressPercent >= 1 && (
+          {progressPercent >= 1 && !isEpisodeUnreleased && (
             <View style={styles.watchedOverlayHorizontal}>
               <Ionicons name="checkmark-circle" size={30} color="rgba(255, 255, 255, 0.9)" />
             </View>
@@ -1827,9 +1920,6 @@ const renderEpisodesModal = () => {
           <Text style={styles.episodeOverviewTextHorizontal} numberOfLines={3}>
             {episodeData.overview || 'No overview available.'}
           </Text>
-          {runtimeString && (
-            <Text style={styles.episodeRuntimeTextHorizontal}>{runtimeString}</Text>
-          )}
         </View>
       </TouchableOpacity>
     );
@@ -1871,6 +1961,7 @@ const renderEpisodesModal = () => {
               {allSeasonsData.length > 1 && ( // Only show season tabs if more than one season
                 <View style={styles.seasonSelectorContainer}>
                   <FlatList
+                    ref={seasonListModalRef}
                     horizontal
                     data={allSeasonsData.sort((a, b) => a.season_number - b.season_number)}
                     renderItem={({ item: seasonItem }) => (
@@ -1889,6 +1980,21 @@ const renderEpisodesModal = () => {
                     keyExtractor={(item) => `season-tab-${item.id || item.season_number}`}
                     showsHorizontalScrollIndicator={false}
                     contentContainerStyle={styles.seasonTabContentContainer}
+                    getItemLayout={(data, index) => ({
+                      length: 130, // Approximate width of a season tab
+                      offset: 130 * index,
+                      index,
+                    })}
+                    onScrollToIndexFailed={(info) => {
+                      // Fallback for when layout isn't ready
+                      const wait = new Promise(resolve => setTimeout(resolve, 200));
+                      wait.then(() => {
+                        seasonListModalRef.current?.scrollToOffset({
+                          offset: info.averageItemLength * info.index,
+                          animated: true,
+                        });
+                      });
+                    }}
                   />
                 </View>
               )}
@@ -1898,6 +2004,7 @@ const renderEpisodesModal = () => {
                   </View>
               ) : episodesForModal.length > 0 ? (
                 <FlatList
+                  ref={episodeListModalRef}
                   horizontal // Changed to horizontal
                   data={episodesForModal.sort((a, b) => a.episode_number - b.episode_number)}
                   renderItem={renderEpisodeItem}
@@ -1907,6 +2014,21 @@ const renderEpisodesModal = () => {
                   initialNumToRender={3}
                   maxToRenderPerBatch={5}
                   windowSize={7}
+                  getItemLayout={(data, index) => ({
+                    length: 195, // Episode item width (180) + marginRight (15)
+                    offset: 195 * index,
+                    index,
+                  })}
+                  onScrollToIndexFailed={(info) => {
+                    // Fallback for when layout isn't ready
+                    const wait = new Promise(resolve => setTimeout(resolve, 200));
+                    wait.then(() => {
+                      episodeListModalRef.current?.scrollToOffset({
+                        offset: info.averageItemLength * info.index,
+                        animated: true,
+                      });
+                    });
+                  }}
                 />
               ) : (
                 <View style={styles.centeredMessage}>
@@ -1975,7 +2097,7 @@ const renderEpisodesModal = () => {
 
       {/* WebView for stream extraction / CAPTCHA - uses currentWebViewConfig */}
       {currentWebViewConfig && !streamExtractionComplete && (
-        <View style={manualWebViewVisible ? styles.visibleWebViewForCaptcha : styles.hiddenWebView}>
+        <View style={(manualWebViewVisible || __DEV__) ? styles.visibleWebViewForCaptcha : styles.hiddenWebView}>
           <WebView
             key={currentSourceAttemptKey} // Use the attempt key to force re-mount
             source={manualWebViewVisible && captchaUrl ? { uri: captchaUrl, headers: currentWebViewConfig.source.headers } : currentWebViewConfig.source}
@@ -2281,7 +2403,7 @@ const renderEpisodesModal = () => {
   bufferingIndicatorContainer: { position: 'absolute', top: '50%', left: '50%', transform: [{ translateX: -18 }, { translateY: -18 }], zIndex: 4 },
   errorContainer: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center', backgroundColor: '#000', zIndex: 10, padding: 20 },
   errorText: { color: '#fff', marginBottom: 10, fontSize: 16, fontWeight: 'bold' },
-  errorDetail: { color: '#888', marginBottom: 20, textAlign: 'center' },
+  errorDetail: { color: '#888', marginBottom: 20, textAlign: 'center', lineHeight: 18, width: "60%" },
   retryButton: { backgroundColor: '#E50914', paddingVertical: 10, paddingHorizontal: 20, borderRadius: 5, marginBottom: 10 },
   retryButtonText: { color: '#fff', fontWeight: 'bold' },
   goBackButton: { backgroundColor: '#222', paddingVertical: 10, paddingHorizontal: 20, borderRadius: 5 },
@@ -2533,11 +2655,11 @@ const renderEpisodesModal = () => {
     marginRight: 15, // Space between horizontal items
     padding: 10,
     width: 180, // Width for each episode item card
-    height: 220, // Fixed height for consistency
+    height: 220,
     justifyContent: 'flex-start', // Align content to the top
   },
   currentEpisodeItemHorizontal: {
-    backgroundColor: 'rgb(46, 46, 46)',
+    backgroundColor: 'rgb(46, 46, 46)'
   },
   episodeThumbnailContainerHorizontal: {
     width: '100%', // Thumbnail takes full width of the card
@@ -2581,9 +2703,7 @@ const renderEpisodesModal = () => {
     borderRadius: 5, // Match thumbnail border radius
   },
   episodeDetailsHorizontal: {
-    flex: 1, // Take remaining space below thumbnail
-    justifyContent: 'flex-start',
-    paddingTop: 5,
+    paddingTop: 5
   },
   episodeTitleTextHorizontal: {
     color: 'white',
@@ -2595,13 +2715,26 @@ const renderEpisodesModal = () => {
     color: '#B0B0B0',
     fontSize: 12,
     lineHeight: 16,
-    marginBottom: 6,
+    marginBottom: 4,
   },
-  episodeRuntimeTextHorizontal: {
-    color: '#888',
-    fontSize: 11,
-    marginTop: 'auto', // Push to the bottom of episodeDetailsHorizontal
-    paddingTop: 4,
+  unreleasedBadgeContainer: {
+    position: 'absolute',
+    top: 5,
+    right: 5,
+    zIndex: 1, // Above thumbnail image, below progress/watched overlays if they were also present
+  },
+  unreleasedBadge: {
+    backgroundColor: '#000',
+    borderColor: '#fff',
+    borderWidth: 1,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 4,
+  },
+  unreleasedBadgeText: {
+    color: 'white',
+    fontSize: 10,
+    fontWeight: 'bold',
   },
   centeredLoader: {
     flex: 1,

@@ -49,6 +49,19 @@ export const getStreamingUrl = (baseUrl, tmdbId, type = 'movie', season = null, 
   // then this function would need to be more conditional, or the path construction
   // could be part of the source object itself.
 
+  if (baseUrl.includes('vidsrc.cc')) {
+    let url = baseUrl;
+    if (type === 'tv' && season && episode) {
+      url += `/tv/${tmdbId}/${season}/${episode}`;
+    } else if (type === 'movie') {
+      url += `/movie/${tmdbId}`;
+    } else {
+      console.warn(`[vidsrcApi] Invalid type or missing season/episode for TV: ${type}`);
+      return null;
+    }
+    return `${url}?autoPlay=false`;
+  }
+
   if (type === 'tv' && season && episode) {
     path = `/tv/${tmdbId}/${season}/${episode}`;
   } else if (type === 'movie') {
