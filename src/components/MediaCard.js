@@ -4,9 +4,40 @@ import { getImageUrl } from '../api/tmdbApi';
 import ImagePlaceholder from './ImagePlaceholder';
 import { Ionicons } from '@expo/vector-icons';
 import Badge from './Badge';
+import { SPORT_LOGO_MAP } from '../api/streameastApi';
 
 const { width } = Dimensions.get('window');
 const FOOTER_HEIGHT = 45;
+
+const formatStartTime = (timestamp) => {
+  const date = new Date(timestamp * 1000);
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  
+  const dateOnly = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  
+  let timeStr = date.toLocaleTimeString('en-US', { 
+    hour: 'numeric', 
+    minute: '2-digit',
+    hour12: true 
+  });
+  
+  if (dateOnly.getTime() === today.getTime()) {
+    return `Today at ${timeStr}`;
+  } else if (dateOnly.getTime() === tomorrow.getTime()) {
+    return `Tomorrow at ${timeStr}`;
+  } else {
+    return date.toLocaleDateString('en-US', { 
+      month: 'short', 
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true
+    });
+  }
+};
 
 const MediaCard = ({
   item,
@@ -15,16 +46,30 @@ const MediaCard = ({
   onRemovePress,
   width: customWidth,
   height: customImageHeight,
-  isContinueWatching = false
+  isContinueWatching = false,
+  isLiveStream = false
 }) => {
   const [imageError, setImageError] = useState(false);
-  const cardWidth = customWidth || styles.defaultCardWidth;
-  const imageContainerHeight = customImageHeight || styles.defaultImageHeight;
   
-  const posterPath = item.poster_path || item.posterPath;
-  const imageSource = posterPath && !imageError
-    ? { uri: getImageUrl(posterPath) }
-    : null;
+  const cardWidth = isLiveStream 
+    ? 240
+    : (customWidth || styles.defaultCardWidth);
+  const imageContainerHeight = isLiveStream 
+    ? 135
+    : (customImageHeight || styles.defaultImageHeight);
+  
+  let imageSource = null;
+  
+  if (isLiveStream) {
+    const sportToken = item.sportToken || 'DEFAULT';
+    const logoUrl = SPORT_LOGO_MAP[sportToken] || SPORT_LOGO_MAP['DEFAULT'];
+    imageSource = { uri: logoUrl };
+  } else {
+    const posterPath = item.poster_path || item.posterPath;
+    imageSource = posterPath && !imageError
+      ? { uri: getImageUrl(posterPath) }
+      : null;
+  }
 
   const progress = (item.position && item.duration) ? (item.position / item.duration) : 0;
 
@@ -60,7 +105,11 @@ const MediaCard = ({
   const mediaType = item.media_type || (item.title ? 'movie' : 'tv');
 
   return (
-    <View style={[styles.outerContainer, { width: cardWidth }]}>
+    <View style={[
+      styles.outerContainer, 
+      { width: cardWidth },
+      isLiveStream && styles.liveStreamContainer
+    ]}>
       <TouchableOpacity
         style={styles.touchableContainer}
         onPress={handlePlay}
@@ -70,21 +119,25 @@ const MediaCard = ({
           {imageSource ? (
             <Image
               source={imageSource}
-              style={styles.image}
-              resizeMode="cover"
+              style={[styles.image, isLiveStream && styles.liveStreamImage]}
+              resizeMode={isLiveStream ? "contain" : "cover"}
               onError={() => setImageError(true)}
             />
           ) : (
             <ImagePlaceholder width={cardWidth} height={imageContainerHeight} />
           )}
 
-          {!isContinueWatching && (
+          {!isContinueWatching && !isLiveStream && (
             <Badge
               mediaType={mediaType}
               releaseDate={item.release_date}
               firstAirDate={item.first_air_date}
               lastAirDate={item.last_air_date}
             />
+          )}
+
+          {isLiveStream && (
+            <Badge isLive={true} isUpcoming={!item.isLive} />
           )}
 
           {isContinueWatching && (
@@ -128,6 +181,19 @@ const MediaCard = ({
           </View>
         </View>
       )}
+
+      {isLiveStream && (
+        <View style={styles.liveStreamFooterContainer}>
+          <Text style={styles.liveStreamTitle} numberOfLines={2}>
+            {item.title}
+          </Text>
+          {!item.isLive && item.matchTime && (
+            <Text style={styles.startTimeText}>
+              {formatStartTime(item.matchTime)}
+            </Text>
+          )}
+        </View>
+      )}
     </View>
   );
 };
@@ -145,6 +211,14 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     overflow: 'hidden',
   },
+  liveStreamContainer: {
+    backgroundColor: '#1a0000',
+    shadowColor: '#FF0000',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.6,
+    shadowRadius: 8,
+    elevation: 8,
+  },
   touchableContainer: {
   },
   imageContainer: {
@@ -158,6 +232,9 @@ const styles = StyleSheet.create({
   image: {
     width: '100%',
     height: '100%',
+  },
+  liveStreamImage: {
+    backgroundColor: '#000',
   },
   playOverlay: {
     ...StyleSheet.absoluteFillObject,
@@ -205,6 +282,26 @@ const styles = StyleSheet.create({
   },
   iconButton: {
     padding: 3,
+  },
+  liveStreamFooterContainer: {
+    paddingHorizontal: 10,
+    paddingTop: 8,
+    paddingBottom: 8,
+    minHeight: 50,
+  },
+  liveStreamTitle: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '600',
+    textAlign: 'center',
+    lineHeight: 18,
+  },
+  startTimeText: {
+    color: '#999999',
+    fontSize: 11,
+    textAlign: 'center',
+    marginTop: 4,
+    fontWeight: '500',
   },
 });
 

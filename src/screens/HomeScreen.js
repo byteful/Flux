@@ -24,7 +24,9 @@ import {
   getImageUrl,
 } from '../api/tmdbApi';
 import { getContinueWatchingList, saveToContinueWatching, removeFromContinueWatching } from '../utils/storage';
+import { fetchLiveStreams, getSportDisplayName } from '../api/streameastApi';
 import MediaRow from '../components/MediaRow';
+import SportRow from '../components/SportRow';
 import FeaturedContent from '../components/FeaturedContent';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -56,7 +58,9 @@ const HomeScreen = () => {
   const [continueWatching, setContinueWatching] = useState([]);
   const [recommendedMovies, setRecommendedMovies] = useState([]);
   const [recommendedTVShows, setRecommendedTVShows] = useState([]);
-  const [genreMedia, setGenreMedia] = useState({}); // State to hold genre-specific media
+  const [genreMedia, setGenreMedia] = useState({});
+  const [liveStreams, setLiveStreams] = useState([]);
+  const [sportCategories, setSportCategories] = useState([]);
   const [loading, setLoading] = useState(true);
   const [featuredContent, setFeaturedContent] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -83,8 +87,15 @@ const HomeScreen = () => {
         setLoading(true);
       }
 
+      // Fetch live streams
+      let liveStreamsData = [];
+      try {
+        liveStreamsData = await fetchLiveStreams();
+      } catch (liveStreamError) {
+        console.error('Error fetching live streams:', liveStreamError);
+      }
+
       // Fetch standard content (already filtered by US providers in tmdbApi.js)
-      // Removed fetchTrending
       const moviesData = await fetchPopularMovies();
       const tvShowsData = await fetchPopularTVShows();
       const newReleaseMoviesData = await fetchNewReleaseMovies();
@@ -184,6 +195,30 @@ const HomeScreen = () => {
       setContinueWatching(continueWatchingData);
       setRecommendedMovies(recMovies);
       setRecommendedTVShows(recTVShows);
+      setLiveStreams(liveStreamsData);
+
+      // Group live streams by sport
+      const sportGroups = {};
+      liveStreamsData.forEach(stream => {
+        const token = stream.sportToken || 'DEFAULT';
+        if (!sportGroups[token]) {
+          sportGroups[token] = {
+            sportToken: token,
+            sportName: getSportDisplayName(token),
+            streams: [],
+            liveCount: 0,
+            totalCount: 0,
+          };
+        }
+        sportGroups[token].streams.push(stream);
+        sportGroups[token].totalCount++;
+        if (stream.isLive) {
+          sportGroups[token].liveCount++;
+        }
+      });
+
+      const sportCategoriesArray = Object.values(sportGroups);
+      setSportCategories(sportCategoriesArray);
 
     } catch (error) {
       console.error('Error fetching content:', error);
@@ -227,10 +262,28 @@ const HomeScreen = () => {
     fetchContent();
   }, [fetchContent]);
 
-  // handleMediaPress remains largely the same, ensuring it handles 'id' from API items
+  const handleSportPress = (sportCategory) => {
+    navigation.navigate('SportStreams', {
+      sportToken: sportCategory.sportToken,
+      sportName: sportCategory.sportName,
+      streams: sportCategory.streams,
+    });
+  };
+
   const handleMediaPress = (item, directPlay = false) => {
-    const isContinueWatchingItem = item.hasOwnProperty('mediaId'); // From storage
-    const isRecommendationOrApiItem = item.hasOwnProperty('id'); // From TMDB API
+    const isContinueWatchingItem = item.hasOwnProperty('mediaId');
+    const isRecommendationOrApiItem = item.hasOwnProperty('id');
+    const isLiveStreamItem = item.hasOwnProperty('isLive');
+
+    if (isLiveStreamItem) {
+      navigation.navigate('VideoPlayer', {
+        isLive: true,
+        streameastUrl: item.streameastUrl,
+        title: item.title,
+        sportToken: item.sportToken,
+      });
+      return;
+    }
 
     let mediaId;
     let mediaType;
@@ -244,30 +297,26 @@ const HomeScreen = () => {
       mediaId = item.mediaId;
       mediaType = item.mediaType;
       title = item.title;
-      // poster_path, season, episode, episodeTitle should already be on the item from storage
     } else if (isRecommendationOrApiItem) {
       mediaId = item.id;
       mediaType = item.media_type || (item.title ? 'movie' : 'tv');
       title = (mediaType === 'tv') ? item.name : item.title;
-      // poster_path is directly from item
-      // season/episode/episodeTitle are not applicable here, they are for continue watching items
     } else {
       console.warn('Unknown item type pressed:', item);
       return;
     }
 
     if (directPlay && mediaType && mediaId && title) {
-      // Ensure posterUrl uses the correct property name from storage
       const posterUrl = item.poster_path ? getImageUrl(item.poster_path) : null;
       navigation.navigate('VideoPlayer', {
         mediaId: mediaId,
         mediaType: mediaType,
         title: title,
-        posterUrl: posterUrl, // Use correct posterUrl
-        poster_path: item.poster_path, // Pass poster_path too if needed elsewhere
-        season: season, // Pass season if available (from continue watching)
-        episode: episode, // Pass episode if available (from continue watching)
-        episodeTitle: episodeTitle, // Pass episode title if available
+        posterUrl: posterUrl,
+        poster_path: item.poster_path,
+        season: season,
+        episode: episode,
+        episodeTitle: episodeTitle,
       });
     } else if (mediaId && mediaType) {
       navigation.navigate('DetailScreen', { mediaId: mediaId, mediaType: mediaType, title: title });
@@ -345,7 +394,12 @@ const HomeScreen = () => {
             />
           )}
 
-          {/* New Release Rows */}
+          <SportRow
+            title="Live Sports"
+            data={sportCategories}
+            onSportPress={handleSportPress}
+          />
+
           {newReleaseMovies.length > 0 && (
             <MediaRow
               title="New Release Movies"

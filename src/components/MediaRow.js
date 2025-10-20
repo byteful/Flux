@@ -6,9 +6,10 @@ const MediaRow = ({
   title, 
   data, 
   onItemPress, 
-  onInfoPress, // Pass down info handler
-  onRemovePress, // Pass down remove handler
-  isContinueWatching // Renamed from isFeatured
+  onInfoPress,
+  onRemovePress,
+  isContinueWatching = false,
+  isLiveStream = false
 }) => {
   return (
     <View style={styles.container}>
@@ -16,18 +17,17 @@ const MediaRow = ({
       <FlatList
         horizontal
         data={data}
-        // Use item.id (contentId) + potentially index for more robust key if needed
         keyExtractor={(item, index) => `${item.id}-${index}`}
         renderItem={({ item }) => (
           <MediaCard 
             item={item} 
             onPress={onItemPress} 
-            onInfoPress={onInfoPress} // Pass to MediaCard
-            onRemovePress={onRemovePress} // Pass to MediaCard
-            // Adjust width/height based on isContinueWatching
-            width={isContinueWatching ? 140 : 100}
-            height={isContinueWatching ? 210 : 150}
-            isContinueWatching={isContinueWatching} // Pass flag
+            onInfoPress={onInfoPress}
+            onRemovePress={onRemovePress}
+            width={isContinueWatching ? 140 : (isLiveStream ? 240 : 100)}
+            height={isContinueWatching ? 210 : (isLiveStream ? 135 : 150)}
+            isContinueWatching={isContinueWatching}
+            isLiveStream={isLiveStream}
           />
         )}
         showsHorizontalScrollIndicator={false}

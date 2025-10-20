@@ -10,6 +10,7 @@ import VideoPlayerScreen from '../screens/VideoPlayerScreen';
 import DetailScreen from '../screens/DetailScreen';
 import SearchScreen from '../screens/SearchScreen';
 import SettingsScreen from '../screens/SettingsScreen';
+import SportStreamsScreen from '../screens/SportStreamsScreen';
 
 const Stack = createStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -51,6 +52,14 @@ const MainStack = () => {
         component={DetailScreen}
         options={({ route }) => ({
           title: route.params?.title || 'Details',
+          headerBackTitle: '',
+        })}
+      />
+      <Stack.Screen 
+        name="SportStreams" 
+        component={SportStreamsScreen}
+        options={({ route }) => ({
+          title: route.params?.sportName || 'Live Streams',
           headerBackTitle: '',
         })}
       />

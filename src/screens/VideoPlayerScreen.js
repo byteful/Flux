@@ -5,7 +5,7 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import * as Brightness from 'expo-brightness';
 import Slider from '@react-native-community/slider';
-import { VideoView, useVideoPlayer, RemotePlaybackButton } from 'expo-video';
+import { VideoView, useVideoPlayer, VideoAirPlayButton } from 'expo-video';
 import { WebView } from 'react-native-webview';
 import { fetchTVShowDetails, fetchSeasonDetails } from '../api/tmdbApi';
 import {
@@ -23,6 +23,7 @@ import {
 } from '../utils/storage';
 import { extractM3U8Stream, extractStreamFromSpecificSource } from '../utils/streamExtractor';
 import { getActiveStreamSources } from '../api/vidsrcApi';
+import { extractLiveStreamM3U8 } from '../api/streameastApi';
 import SourceSelectionModal from '../components/SourceSelectionModal';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
@@ -64,6 +65,9 @@ const VideoPlayerScreen = ({ route }) => {
     episodeTitle,
     poster_path,
     air_date: currentEpisodeAirDateFromParams,
+    isLive,
+    streameastUrl,
+    sportToken,
   } = route.params;
 
   const isFutureDate = (airDateString) => {
@@ -120,8 +124,13 @@ const VideoPlayerScreen = ({ route }) => {
   // --- New Auto-Play States ---
   const [autoPlayEnabled, setAutoPlayEnabled] = useState(false);
   const [showNextEpisodeButton, setShowNextEpisodeButton] = useState(false);
-  const [isFindingNextEpisode, setIsFindingNextEpisode] = useState(false); // Prevent multiple fetches
+  const [isFindingNextEpisode, setIsFindingNextEpisode] = useState(false);
   // --- End New Auto-Play States ---
+
+  // --- Live Stream States ---
+  const [isLiveStream, setIsLiveStream] = useState(false);
+  const [isAtLiveEdge, setIsAtLiveEdge] = useState(true);
+  // --- End Live Stream States ---
 
   
     // --- Subtitle States ---
@@ -240,7 +249,9 @@ const VideoPlayerScreen = ({ route }) => {
     headers: getStreamHeaders(), // Will be updated when streamReferer changes
     uri: videoUrl,
     metadata: {
-      title: episodeTitle || title
+      title: mediaType === "tv" && episodeTitle ? (title + " - " + episodeTitle) : title,
+      artist: "Flux",
+      artwork: poster_path ? `https://image.tmdb.org/t/p/w500${poster_path}` : undefined
     }
   });
 
@@ -249,6 +260,8 @@ const VideoPlayerScreen = ({ route }) => {
       // if (subtitlesEnabled) {
       //   player.timeUpdateEventInterval = 1; // More frequent updates for subtitles
       // } else
+      player.allowsExternalPlayback = true;
+      player.showNowPlayingNotification = true;
       if (showControls) {
         player.timeUpdateEventInterval = 1; // Frequent updates when controls are shown
       } else {
@@ -436,13 +449,14 @@ const VideoPlayerScreen = ({ route }) => {
   }, [navigation, player, handleGoBack]);
 
   useEffect(() => {
-    // Fetch next episode data if within the 2-minute window and data isn't already fetched
+    if (isLiveStream) return;
+    
     if (duration > 0 && position > 0 && (duration - position) < TWO_MINUTE_THRESHOLD_SECONDS) {
       if (!isFindingNextEpisode && !showNextEpisodeButton) {
-        findNextEpisode(); // This sets showNextEpisodeButton to true when data is ready
+        findNextEpisode();
       }
     }
-  }, [position, duration, findNextEpisode, isFindingNextEpisode, showNextEpisodeButton]);
+  }, [position, duration, findNextEpisode, isFindingNextEpisode, showNextEpisodeButton, isLiveStream]);
 
 
   
@@ -880,10 +894,16 @@ const VideoPlayerScreen = ({ route }) => {
 
   const handlePositionChange = (event) => {
     const currentEventTime = typeof event === 'number' ? event : event?.currentTime;
-    if (typeof currentEventTime !== 'number' || isNaN(currentEventTime) || isSeeking) { // Ignore updates while seeking
+    if (typeof currentEventTime !== 'number' || isNaN(currentEventTime) || isSeeking) {
       return;
     }
-    setPosition(currentEventTime); // Update UI state
+    setPosition(currentEventTime);
+
+    if (isLiveStream && duration > 0) {
+      const liveEdgeThreshold = 2;
+      const atLiveEdge = currentEventTime >= duration - liveEdgeThreshold;
+      setIsAtLiveEdge(atLiveEdge);
+    }
 
     const now = Date.now();
 
@@ -1150,11 +1170,12 @@ const VideoPlayerScreen = ({ route }) => {
     };
 
     const checkSavedProgress = async () => {
-      // ... (keep existing progress loading logic) ...
+      if (isLive) {
+        return;
+      }
       try {
         const progress = await getWatchProgress(mediaId);
         if (progress && progress.position && progress.season === season && progress.episode === episode) {
-          // Avoid resuming too close to the end if auto-play will trigger
           if (!progress.duration || (progress.duration - progress.position > VIDEO_END_THRESHOLD_SECONDS * 1.5)) {
             setResumeTime(progress.position);
           }
@@ -1166,18 +1187,53 @@ const VideoPlayerScreen = ({ route }) => {
       }
     };
 
+    const setupLiveStreamExtraction = async () => {
+      if (!isMounted) return;
+      setCurrentAttemptingSource('StreamEast');
+      
+      try {
+        const result = await extractLiveStreamM3U8(streameastUrl);
+        
+        if (!isMounted || streamExtractionComplete) {
+          return;
+        }
+        
+        if (result && result.url) {
+          setVideoUrl(result.url);
+          player.uri = result.url;
+          setStreamReferer(result.referer);
+          setCurrentPlayingSourceName('StreamEast');
+          setStreamExtractionComplete(true);
+          setCurrentAttemptingSource(null);
+          setIsLiveStream(true);
+        } else {
+          throw new Error('Failed to extract live stream URL');
+        }
+      } catch (err) {
+        if (!isMounted) return;
+        console.error('[VideoPlayerScreen] Live stream extraction error:', err);
+        setError({ 
+          message: 'Failed to load live stream. The stream may have ended or is no longer available.',
+          isLiveStreamError: true 
+        });
+        setStreamExtractionComplete(true);
+        setLoading(false);
+        setIsInitialLoading(false);
+        setCurrentAttemptingSource(null);
+      }
+    };
+
     const setupStreamExtraction = () => {
       if (!isMounted) return;
-      setCurrentAttemptingSource(null); // Reset before starting
+      setCurrentAttemptingSource(null);
 
       extractM3U8Stream(
         mediaId, mediaType, season, episode,
-        // onStreamFound: (url, referer, sourceName) => void
         (streamUrl, referer, sourceName) => {
           if (!isMounted || streamExtractionComplete) {
             return;
           }
-          saveStreamUrl(contentId, streamUrl, referer, sourceName); // Save referer and sourceName
+          saveStreamUrl(contentId, streamUrl, referer, sourceName);
           setVideoUrl(streamUrl);
           player.uri = streamUrl;
           setStreamReferer(referer);
@@ -1185,7 +1241,7 @@ const VideoPlayerScreen = ({ route }) => {
           setStreamExtractionComplete(true);
           setManualWebViewVisible(false);
           setCaptchaUrl(null);
-          setCurrentWebViewConfig(null); // Clear WebView config as it's no longer needed
+          setCurrentWebViewConfig(null);
           setCurrentAttemptingSource(null);
         },
         // onSourceError: (error, sourceName) => void
@@ -1241,32 +1297,28 @@ const VideoPlayerScreen = ({ route }) => {
 
     const initializePlayer = async () => {
       await setOrientationAndHideUI();
+      
+      if (isLive) {
+        setIsLiveStream(true);
+        if (isMounted) {
+          setupLiveStreamExtraction();
+        }
+        return;
+      }
+
       await checkSavedProgress();
 
       const isAutoPlayEnabled = await getAutoPlaySetting();
       if (isMounted) setAutoPlayEnabled(isAutoPlayEnabled);
 
-      // // Load subtitle preference & enabled state
-      // const prefLang = await getLastSelectedSubtitleLanguage();
-      // const initialSubtitlesEnabled = await getSubtitlesEnabledState();
-      // if (isMounted) {
-      //   preferredSubtitleLanguageLoadedRef.current = prefLang;
-      //   setSubtitlesEnabled(initialSubtitlesEnabled); // Set initial enabled state from storage
-      //   initialSubtitlePreferenceAppliedRef.current = false; // Reset for current media
-      // }
-
       const cachedStreamData = await getCachedStreamUrl(contentId);
       if (cachedStreamData && cachedStreamData.url && isMounted) {
         setVideoUrl(cachedStreamData.url);
         setStreamReferer(cachedStreamData.referer);
-        setCurrentPlayingSourceName(cachedStreamData.sourceName); // Use directly from cached data
+        setCurrentPlayingSourceName(cachedStreamData.sourceName);
         setStreamExtractionComplete(true);
-        // // Since stream is ready, try to find subtitles for auto-application
-        // if (!loadingSubtitles) findSubtitles();
       } else if (isMounted) {
         setupStreamExtraction();
-        // // For non-cached, findSubtitles will be called by another effect once videoUrl is set,
-        // // or when user opens the modal.
       }
     };
 
@@ -1305,8 +1357,27 @@ const VideoPlayerScreen = ({ route }) => {
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [navigation, contentId, mediaId, mediaType, season, episode, retryAttempts, player]); // REMOVED findSubtitles from dependency array
+  }, [navigation, contentId, mediaId, mediaType, season, episode, retryAttempts, player]);
   // --- End Main Setup Effect ---
+  
+  // --- Live Stream Error Handling ---
+  useEffect(() => {
+    if (error && error.isLiveStreamError) {
+      Alert.alert(
+        'Live Stream Ended',
+        'The live stream has ended or is no longer available.',
+        [
+          {
+            text: 'OK',
+            onPress: () => {
+              handleGoBack();
+            }
+          }
+        ]
+      );
+    }
+  }, [error]);
+  // --- End Live Stream Error Handling ---
   
   
   // --- Source Selection Modal Logic ---
@@ -1480,8 +1551,7 @@ const VideoPlayerScreen = ({ route }) => {
 
   // --- Save Progress ---
   const saveProgress = (currentTime) => {
-    // Only save if not unmounting and time/duration are valid
-    if (isUnmounting || !currentTime || !duration || duration <= 0) return;
+    if (isLiveStream || isUnmounting || !currentTime || !duration || duration <= 0) return;
 
     if ((duration - currentTime) < VIDEO_END_THRESHOLD_SECONDS) {
       return;
@@ -2188,8 +2258,8 @@ const renderEpisodesModal = () => {
               style={StyleSheet.absoluteFill} // VideoView fills the scaled Animated.View
               nativeControls={false}
               allowsPictureInPicture={true}
-              allowsExternalPlayback={true}
               allowsVideoFrameAnalysis={false}
+              startsPictureInPictureAutomatically={true}
               resizeMode="contain" // Base resize mode is contain
               // pointerEvents="none" // Prevent VideoView from interfering with gestures on parent Animated.View
             />
@@ -2249,15 +2319,17 @@ const renderEpisodesModal = () => {
                 </>
               )} */}
 
-              <TouchableOpacity onPress={openChangeSourceModal} style={styles.controlButton} disabled={isInitialLoading || !videoUrl || showSourceSelectionModal}>
-                {isChangingSource ? ( // isChangingSource now means modal-initiated attempt is active
-                  <ActivityIndicator size="small" color="white" />
-                ) : (
-                  <Ionicons name="cloudy" size={24} color="white" />
-                )}
-              </TouchableOpacity>
+              {!isLiveStream && (
+                <TouchableOpacity onPress={openChangeSourceModal} style={styles.controlButton} disabled={isInitialLoading || !videoUrl || showSourceSelectionModal}>
+                  {isChangingSource ? (
+                    <ActivityIndicator size="small" color="white" />
+                  ) : (
+                    <Ionicons name="cloudy" size={24} color="white" />
+                  )}
+                </TouchableOpacity>
+              )}
 
-              {mediaType === 'tv' && (
+              {mediaType === 'tv' && !isLiveStream && (
                 <TouchableOpacity onPress={toggleEpisodesModal} style={styles.controlButton}>
                   <Ionicons name="albums-outline" size={24} color="white" />
                 </TouchableOpacity>
@@ -2269,7 +2341,16 @@ const renderEpisodesModal = () => {
                   color={'white'} // Dynamic color // subtitlesEnabled && selectedLanguage ? '#E50914' : 'white'
                 />
               </TouchableOpacity> */}
-              {/* <RemotePlaybackButton style={styles.controlButton} /> */}
+              {Platform.OS === 'ios' && (
+                <View style={styles.airPlayButtonContainer}>
+                  <VideoAirPlayButton
+                    player={player}
+                    tint="white"
+                    prioritizeVideoDevices={true}
+                    style={styles.airPlayButton}
+                  />
+                </View>
+              )}
             </View>
           </SafeAreaView>
 
@@ -2305,19 +2386,38 @@ const renderEpisodesModal = () => {
           {/* Bottom Controls */}
           <SafeAreaView style={styles.bottomControls}>
             {(() => {
-              const displayPosition = isSeeking && seekPreviewPosition !== null ? seekPreviewPosition : position;
-              const progressPercent = (displayPosition / Math.max(duration, 1)) * 100;
-              return (
-                <>
-                  <Text style={styles.timeText}>{formatTime(displayPosition)}</Text>
-                  <View style={styles.progressBar} ref={progressBarRef}>
-                    <View style={[styles.progressFill, { width: `${progressPercent}%` }]}/>
-                    <View style={[styles.progressThumb, { left: `${progressPercent}%` }]}/>
-                    <View style={styles.progressTouchArea} {...progressPanResponder.panHandlers}/>
-                  </View>
-                  <Text style={styles.timeText}>{formatTime(duration)}</Text>
-                </>
-              );
+              if (isLiveStream) {
+                const displayPosition = isSeeking && seekPreviewPosition !== null ? seekPreviewPosition : position;
+                const progressPercent = (displayPosition / Math.max(duration, 1)) * 100;
+                return (
+                  <>
+                    <View style={styles.timeText} />
+                    <View style={styles.progressBar} ref={progressBarRef}>
+                      <View style={[styles.progressFill, { width: `${progressPercent}%` }]}/>
+                      <View style={[styles.progressThumb, { left: `${progressPercent}%` }]}/>
+                      <View style={styles.progressTouchArea} {...progressPanResponder.panHandlers}/>
+                    </View>
+                    <View style={styles.liveIndicatorContainer}>
+                      <View style={[styles.liveCircle, { backgroundColor: isAtLiveEdge ? '#FF0000' : '#888888' }]} />
+                      <Text style={styles.liveText}>LIVE</Text>
+                    </View>
+                  </>
+                );
+              } else {
+                const displayPosition = isSeeking && seekPreviewPosition !== null ? seekPreviewPosition : position;
+                const progressPercent = (displayPosition / Math.max(duration, 1)) * 100;
+                return (
+                  <>
+                    <Text style={styles.timeText}>{formatTime(displayPosition)}</Text>
+                    <View style={styles.progressBar} ref={progressBarRef}>
+                      <View style={[styles.progressFill, { width: `${progressPercent}%` }]}/>
+                      <View style={[styles.progressThumb, { left: `${progressPercent}%` }]}/>
+                      <View style={styles.progressTouchArea} {...progressPanResponder.panHandlers}/>
+                    </View>
+                    <Text style={styles.timeText}>{formatTime(duration)}</Text>
+                  </>
+                );
+              }
             })()}
           </SafeAreaView>
         </>
@@ -2424,6 +2524,8 @@ const renderEpisodesModal = () => {
   },
   topRightButtons: { flexDirection: 'row' },
   controlButton: { padding: 8, marginLeft: 8 },
+  airPlayButtonContainer: { marginLeft: 8, justifyContent: 'center', alignItems: 'center' },
+  airPlayButton: { width: 32, height: 32, color: 'white', borderColor: 'white' },
   brightnessSliderContainer: { position: 'absolute', left: 40, top: '20%', bottom: '20%', width: 40, justifyContent: 'center', alignItems: 'center' },
   brightnessIcon: { marginBottom: 55 },
   brightnessSlider: { width: 150, height: 30, transform: [{ rotate: '-90deg' }] },
@@ -2436,6 +2538,9 @@ const renderEpisodesModal = () => {
   progressThumb: { position: 'absolute', top: -4, width: 12, height: 12, borderRadius: 6, backgroundColor: '#E50914', transform: [{ translateX: -6 }], zIndex: 3 },
   progressTouchArea: { position: 'absolute', height: 20, width: '100%', top: -8, backgroundColor: 'transparent', zIndex: 4 },
   timeText: { color: '#fff', fontSize: 14, minWidth: 40, textAlign: 'center' },
+  liveIndicatorContainer: { flexDirection: 'row', alignItems: 'center', minWidth: 60, justifyContent: 'center' },
+  liveCircle: { width: 10, height: 10, borderRadius: 5, marginRight: 6 },
+  liveText: { color: '#fff', fontSize: 14, fontWeight: 'bold', letterSpacing: 1 },
   
   // --- New Styles for Next Episode Button ---
   nextEpisodeContainer: {

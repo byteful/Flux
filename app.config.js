@@ -61,7 +61,14 @@ export default {
     },
     plugins: [
       "expo-screen-orientation",
-      "expo-video"
+      [
+        "expo-video",
+        {
+          "supportsBackgroundPlayback": true,
+          "supportsPictureInPicture": true
+        }
+      ],
+      "expo-secure-store"
     ],
     assetBundlePatterns: [
       "**/*"
