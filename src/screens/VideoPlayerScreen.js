@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { View, StyleSheet, ActivityIndicator, BackHandler, Text, TouchableOpacity, Platform, PanResponder, Animated, Easing, Modal, FlatList, Dimensions, AppState, Image } from 'react-native';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { View, Alert, StyleSheet, ActivityIndicator, BackHandler, Text, TouchableOpacity, Platform, PanResponder, Animated, Easing, Modal, FlatList, Dimensions, AppState, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import * as ScreenOrientation from 'expo-screen-orientation';
@@ -16,10 +16,8 @@ import {
   getAutoPlaySetting,
   getEpisodeWatchProgress,
   clearSpecificStreamFromCache,
-  saveLastSelectedSubtitleLanguage,
-  // getLastSelectedSubtitleLanguage,
-  // saveSubtitlesEnabledState, // Import new function
-  // getSubtitlesEnabledState // Import new function
+  saveSubtitleLanguagePreference,
+  getSubtitleLanguagePreference,
 } from '../utils/storage';
 import { extractM3U8Stream, extractStreamFromSpecificSource } from '../utils/streamExtractor';
 import { getActiveStreamSources } from '../api/vidsrcApi';
@@ -27,13 +25,14 @@ import { extractLiveStreamM3U8 } from '../api/streameastApi';
 import SourceSelectionModal from '../components/SourceSelectionModal';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { useEventListener } from 'expo';
-// import parseSrt from 'parse-srt';
-// import { searchSubtitles, downloadSubtitle } from '../api/opensubtitlesApi';
+import parseSrt from 'parse-srt';
+import { searchSubtitles, downloadSubtitle } from '../api/opensubtitlesApi';
 import { GestureHandlerRootView, GestureDetector, Gesture } from 'react-native-gesture-handler';
-import { runOnJS } from 'react-native-reanimated';
-// import SubtitlesModal from '../components/SubtitlesModal'; // Import the new modal
-// import { getLanguageName } from '../utils/languageUtils'; // Import the new utility
+import { runOnJS } from 'react-native-worklets';
+import SubtitlesModal from '../components/SubtitlesModal';
+import { getLanguageName } from '../utils/languageUtils';
 
 // Constants for auto-play
 const VIDEO_END_THRESHOLD_SECONDS = 45; // Show button 45 secs before end
@@ -88,6 +87,17 @@ const VideoPlayerScreen = ({ route }) => {
   const animatedScale = useRef(new Animated.Value(1)).current;
   // --- End Pinch to Zoom States ---
 
+  // --- Double Tap Seek States ---
+  const [leftSeekAmount, setLeftSeekAmount] = useState(0);
+  const [rightSeekAmount, setRightSeekAmount] = useState(0);
+  const leftSeekOpacity = useRef(new Animated.Value(0)).current;
+  const rightSeekOpacity = useRef(new Animated.Value(0)).current;
+  const leftArrowTranslate = useRef(new Animated.Value(0)).current;
+  const rightArrowTranslate = useRef(new Animated.Value(0)).current;
+  const leftSeekTimeoutRef = useRef(null);
+  const rightSeekTimeoutRef = useRef(null);
+  // --- End Double Tap Seek States ---
+
   // ... existing states ...
   const [loading, setLoading] = useState(true);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
@@ -120,7 +130,7 @@ const VideoPlayerScreen = ({ route }) => {
   const [showSourceSelectionModal, setShowSourceSelectionModal] = useState(false);
   const [availableSourcesList, setAvailableSourcesList] = useState([]);
   const [sourceAttemptStatus, setSourceAttemptStatus] = useState({}); // { [sourceName: string]: 'idle' | 'loading' | 'failed' | 'success' }
-  
+
   // --- New Auto-Play States ---
   const [autoPlayEnabled, setAutoPlayEnabled] = useState(false);
   const [showNextEpisodeButton, setShowNextEpisodeButton] = useState(false);
@@ -130,19 +140,18 @@ const VideoPlayerScreen = ({ route }) => {
   // --- Live Stream States ---
   const [isLiveStream, setIsLiveStream] = useState(false);
   const [isAtLiveEdge, setIsAtLiveEdge] = useState(true);
+  const [isMuted, setIsMuted] = useState(false);
   // --- End Live Stream States ---
 
-  
-    // --- Subtitle States ---
-    // const [availableLanguages, setAvailableLanguages] = useState({}); // Stores { langCode: bestSubtitleInfo }
-    // const [selectedLanguage, setSelectedLanguage] = useState(null); // Stores selected language code ('en', 'es', etc.) or null
-    // const [parsedSubtitles, setParsedSubtitles] = useState([]);
-    // const [currentSubtitleText, setCurrentSubtitleText] = useState('');
-    // // const [showSubtitleSelection, setShowSubtitleSelection] = useState(false); // Removed
-    // const [subtitlesEnabled, setSubtitlesEnabled] = useState(false); // Default to disabled
-    // const [loadingSubtitles, setLoadingSubtitles] = useState(false);
-    // const [subtitleOffset, setSubtitleOffset] = useState(0); // In milliseconds
-    // --- End Subtitle States ---
+
+  // --- Subtitle States ---
+  const [availableLanguages, setAvailableLanguages] = useState({});
+  const [selectedLanguage, setSelectedLanguage] = useState(null);
+  const [parsedSubtitles, setParsedSubtitles] = useState([]);
+  const [currentSubtitleText, setCurrentSubtitleText] = useState('');
+  const [subtitlesEnabled, setSubtitlesEnabled] = useState(false);
+  const [loadingSubtitles, setLoadingSubtitles] = useState(false);
+  // --- End Subtitle States ---
   // --- Episodes Viewer Modal States ---
   const [showEpisodesModal, setShowEpisodesModal] = useState(false);
   const [allSeasonsData, setAllSeasonsData] = useState([]); // Stores [{ season_number, name, episode_count, episodes: [] }]
@@ -152,15 +161,15 @@ const VideoPlayerScreen = ({ route }) => {
   const [modalEpisodeProgress, setModalEpisodeProgress] = useState({}); // { 'sX_eY': { position, duration } }
   // --- End Episodes Viewer Modal States ---
 
-  
-    // --- Subtitles Modal State ---
-    // const [showSubtitlesModal, setShowSubtitlesModal] = useState(false);
-    // --- End Subtitles Modal State ---
-  
-    // --- Refs for Subtitle Preference Loading ---
-    // const preferredSubtitleLanguageLoadedRef = useRef(null); // Stores the loaded preference string or null
-    // const initialSubtitlePreferenceAppliedRef = useRef(false); // Tracks if auto-apply has been attempted
-    // --- End Subtitle Preference Refs ---
+
+  // --- Subtitles Modal State ---
+  const [showSubtitlesModal, setShowSubtitlesModal] = useState(false);
+  // --- End Subtitles Modal State ---
+
+  // --- Refs for Subtitle Preference Loading ---
+  const preferredSubtitleLanguageLoadedRef = useRef(null);
+  const initialSubtitlePreferenceAppliedRef = useRef(false);
+  // --- End Subtitle Preference Refs ---
   // Effect to manage screen orientation when episodes modal is shown/hidden
   useEffect(() => {
     const handleOrientationChange = async (event) => {
@@ -203,7 +212,7 @@ const VideoPlayerScreen = ({ route }) => {
       }
     };
   }, [showEpisodesModal]);
-  
+
   const logSetShowControls = useCallback((value) => {
     setShowControls(value);
   }, [setShowControls]);
@@ -257,18 +266,17 @@ const VideoPlayerScreen = ({ route }) => {
 
   useEffect(() => {
     if (player && videoUrl) {
-      // if (subtitlesEnabled) {
-      //   player.timeUpdateEventInterval = 1; // More frequent updates for subtitles
-      // } else
       player.allowsExternalPlayback = true;
       player.showNowPlayingNotification = true;
-      if (showControls) {
+      if (subtitlesEnabled) {
+        player.timeUpdateEventInterval = 1; // Frequent updates for subtitle sync
+      } else if (showControls) {
         player.timeUpdateEventInterval = 1; // Frequent updates when controls are shown
       } else {
         player.timeUpdateEventInterval = 1000; // Less frequent when controls hidden and no subs
       }
     }
-  }, [player, videoUrl, showControls]); // Removed subtitlesEnabled
+  }, [player, videoUrl, showControls, subtitlesEnabled]);
 
   const contentId = mediaType === 'tv'
     ? `tv-${mediaId}-s${season}-e${episode}`
@@ -450,7 +458,7 @@ const VideoPlayerScreen = ({ route }) => {
 
   useEffect(() => {
     if (isLiveStream) return;
-    
+
     if (duration > 0 && position > 0 && (duration - position) < TWO_MINUTE_THRESHOLD_SECONDS) {
       if (!isFindingNextEpisode && !showNextEpisodeButton) {
         findNextEpisode();
@@ -459,256 +467,288 @@ const VideoPlayerScreen = ({ route }) => {
   }, [position, duration, findNextEpisode, isFindingNextEpisode, showNextEpisodeButton, isLiveStream]);
 
 
-  
-    // --- Subtitle Logic ---
-    // const findSubtitles = useCallback(async () => {
-    //   if (!mediaId || loadingSubtitles) return;
-    //   setLoadingSubtitles(true);
-    //   setAvailableLanguages({}); // Clear previous results
-      
-    //   // TODO: Get preferred languages from settings/storage in the future
-    //   const preferredLanguages = ['en', 'es', 'pt', 'fr', 'de', 'it', 'ja', 'ko', 'zh']; // Example list
-    //   const languageQueryString = preferredLanguages.join(',');
-  
-    //   try {
-    //     const results = await searchSubtitles(
-    //       mediaId,
-    //       languageQueryString, // Pass comma-separated list of preferred languages
-    //       mediaType === 'tv' ? season : undefined,
-    //       mediaType === 'tv' ? episode : undefined
-    //     );
-        
-    //     const bestSubtitlesByLang = {};
-    //     results.forEach(sub => {
-    //       const attr = sub.attributes;
-    //       if (!attr || !attr.language || !attr.files || attr.files.length === 0) {
-    //         return;
-    //       }
-  
-    //       // Filter out "foreign parts only" subtitles
-    //       if (attr.foreign_parts_only === true) {
-    //         return;
-    //       }
-          
-    //       const langCode = attr.language;
-    //       const fileInfo = attr.files[0]; // Assuming the first file is the relevant one (e.g., SRT)
-  
-    //       const currentSubInfo = {
-    //         language: langCode,
-    //         languageName: getLanguageName(langCode),
-    //         fileId: fileInfo.file_id,
-    //         releaseName: attr.release,
-    //         downloadCount: attr.download_count || 0,
-    //         fps: attr.fps || -1,
-    //         uploaderName: attr.uploader?.name,
-    //         uploadDate: attr.upload_date,
-    //         legacySubtitleId: attr.legacy_subtitle_id,
-    //         // Attributes for selection logic
-    //         moviehashMatch: attr.moviehash_match === true,
-    //         fromTrusted: attr.from_trusted === true,
-    //         hearingImpaired: attr.hearing_impaired === true,
-    //         // ratings: attr.ratings || 0, // Could also use ratings or votes
-    //       };
-  
-    //       const existingBest = bestSubtitlesByLang[langCode];
-  
-    //       if (!existingBest) {
-    //         bestSubtitlesByLang[langCode] = currentSubInfo;
-    //       } else {
-    //         let newIsBetter = false;
-    //         // Rule 1: Prefer moviehash_match: true
-    //         if (currentSubInfo.moviehashMatch && !existingBest.moviehashMatch) {
-    //           newIsBetter = true;
-    //         } else if (!currentSubInfo.moviehashMatch && existingBest.moviehashMatch) {
-    //           newIsBetter = false;
-    //         } else { // Same moviehash_match status (both true or both false)
-    //           // Rule 2: Prefer from_trusted: true
-    //           if (currentSubInfo.fromTrusted && !existingBest.fromTrusted) {
-    //             newIsBetter = true;
-    //           } else if (!currentSubInfo.fromTrusted && existingBest.fromTrusted) {
-    //             newIsBetter = false;
-    //           } else { // Same from_trusted status
-    //             // Rule 3: Prefer hearing_impaired: false
-    //             if (!currentSubInfo.hearingImpaired && existingBest.hearingImpaired) {
-    //               newIsBetter = true;
-    //             } else if (currentSubInfo.hearingImpaired && !existingBest.hearingImpaired) {
-    //               newIsBetter = false;
-    //             } else { // Same hearing_impaired status
-    //               // Rule 4: Higher download_count is better
-    //               if (currentSubInfo.downloadCount > existingBest.downloadCount) {
-    //                 newIsBetter = true;
-    //               }
-    //               // As a very final tie-breaker, could consider ratings or votes if download counts are equal
-    //               // else if (currentSubInfo.downloadCount === existingBest.downloadCount && currentSubInfo.ratings > existingBest.ratings) {
-    //               //   newIsBetter = true;
-    //               // }
-    //             }
-    //           }
-    //         }
-  
-    //         if (newIsBetter) {
-    //           bestSubtitlesByLang[langCode] = currentSubInfo;
-    //         }
-    //       }
-    //     });
-        
-    //     setAvailableLanguages(bestSubtitlesByLang);
-    //   } catch (err) {
-    //     console.error("Error searching subtitles:", err);
-    //     // Optionally, set an error state for subtitles
-    //   } finally {
-    //     setLoadingSubtitles(false);
-    //   }
-    // }, [mediaId, mediaType, season, episode, loadingSubtitles]);
-  
-    // const selectSubtitle = useCallback(async (langCode) => {
-    //   setSubtitleOffset(0); // Reset offset on new selection or turning off
-    //   // setShowSubtitlesModal(false); // REMOVE THIS LINE - Modal closure handled by caller
-    //   if (!langCode) {
-    //     setParsedSubtitles([]);
-    //     setSelectedLanguage(null);
-    //     setCurrentSubtitleText('');
-    //     setSubtitlesEnabled(false);
-    //     // saveLastSelectedSubtitleLanguage(null);
-    //     // saveSubtitlesEnabledState(false); // Persist enabled state
-    //     return;
-    //   }
-  
-    //   if (langCode === selectedLanguage) {
-    //     setSubtitlesEnabled(true);
-    //     // saveSubtitlesEnabledState(true); // Ensure it's persisted if toggled on
-    //     return;
-    //   }
-  
-    //   const bestSubtitleInfo = availableLanguages[langCode];
-    //   if (!bestSubtitleInfo || !bestSubtitleInfo.fileId) {
-    //     console.error(`Error: No valid subtitle fileId found for language: ${langCode}`);
-    //     setLoadingSubtitles(false);
-    //     return;
-    //   }
-  
-    //   setLoadingSubtitles(true);
-    //   setSelectedLanguage(langCode);
-    //   setParsedSubtitles([]);
-    //   setCurrentSubtitleText('');
-  
-    //   try {
-    //     const srtContent = await downloadSubtitle(bestSubtitleInfo.fileId);
-    //     if (srtContent) {
-    //       const parsed = parseSrt(srtContent);
-    //       const parsedWithSeconds = parsed.map(line => ({
-    //         ...line,
-    //         startSeconds: timeToSeconds(line.start),
-    //         endSeconds: timeToSeconds(line.end),
-    //       }));
-    //       setParsedSubtitles(parsedWithSeconds);
-    //       setSubtitlesEnabled(true);
-    //       // saveLastSelectedSubtitleLanguage(langCode);
-    //       // saveSubtitlesEnabledState(true); // Persist enabled state
-    //     } else {
-    //       console.warn("Failed to download subtitle content.");
-    //       setSelectedLanguage(null);
-    //       setSubtitlesEnabled(false);
-    //       // saveLastSelectedSubtitleLanguage(null);
-    //       // saveSubtitlesEnabledState(false); // Persist enabled state
-    //     }
-    //   } catch (err) {
-    //     console.error("Error during subtitle download or parsing:", err);
-    //     setSelectedLanguage(null);
-    //     setSubtitlesEnabled(false);
-    //     // saveLastSelectedSubtitleLanguage(null);
-    //     // saveSubtitlesEnabledState(false); // Persist enabled state
-    //   } finally {
-    //     setLoadingSubtitles(false);
-    //   }
-    // }, [selectedLanguage, availableLanguages]); // saveLastSelectedSubtitleLanguage, saveSubtitlesEnabledState
-  
-    // Helper to convert SRT time format (00:00:00,000) to seconds
-    // const timeToSeconds = (timeInput) => {
-    //   // Check if input is already a number (assume seconds)
-    //   if (typeof timeInput === 'number' && !isNaN(timeInput)) {
-    //     return timeInput;
-    //   }
-  
-    //   if (typeof timeInput !== 'string' || !timeInput) {
-    //     return 0;
-    //   }
-  
-    //   // Proceed with parsing if it's a string
-    //   try {
-    //     const timeString = timeInput; // Rename for clarity within this block
-    //     const parts = timeString.split(':');
-    //     if (parts.length !== 3) throw new Error('Invalid time format (parts)');
-    //     const secondsAndMs = parts[2].split(',');
-    //     if (secondsAndMs.length !== 2) throw new Error('Invalid time format (ms)');
-    //     const hours = parseInt(parts[0], 10);
-    //     const minutes = parseInt(parts[1], 10);
-    //     const seconds = parseInt(secondsAndMs[0], 10);
-    //     const milliseconds = parseInt(secondsAndMs[1], 10);
-    //     if (isNaN(hours) || isNaN(minutes) || isNaN(seconds) || isNaN(milliseconds)) {
-    //       throw new Error('Invalid number parsed from string parts');
-    //     }
-    //     return hours * 3600 + minutes * 60 + seconds + milliseconds / 1000;
-    //   } catch (e) {
-    //     console.error(`Error parsing time string "${timeInput}":`, e);
-    //     return 0;
-    //   }
-    // };
-  
-    // const updateCurrentSubtitle = useCallback((currentPositionSeconds) => {
-    //   if (!subtitlesEnabled || parsedSubtitles.length === 0) {
-    //     if (currentSubtitleText !== '') setCurrentSubtitleText('');
-    //     return;
-    //   }
-  
-    //   const adjustedPositionSeconds = currentPositionSeconds + (subtitleOffset / 1000); // Apply offset
-  
-    //   const currentSub = parsedSubtitles.find(
-    //     line => adjustedPositionSeconds >= line.startSeconds && adjustedPositionSeconds <= line.endSeconds
-    //   );
-  
-    //   let newText = currentSub ? currentSub.text : '';
-  
-    //   // Clean HTML tags from the subtitle text
-    //   if (newText) {
-    //     // Replace <br> tags with newline characters
-    //     newText = newText.replace(/<br\s*\/?>/gi, '\n');
-    //     // Remove other common HTML tags (i, b, u, font)
-    //     newText = newText.replace(/<\/?(i|b|u|font)[^>]*>/gi, '');
-    //     // Trim whitespace
-    //     newText = newText.trim();
-    //   }
-  
-    //   if (newText !== currentSubtitleText) {
-    //     setCurrentSubtitleText(newText);
-    //   }
-    // }, [subtitlesEnabled, parsedSubtitles, currentSubtitleText, subtitleOffset]); // Add subtitleOffset
-  
-  // const SUBTITLE_OFFSET_INCREMENT_MS = 250; // 250ms increment
-  
-  // const adjustSubtitleOffset = (amountMs) => {
-  //   setSubtitleOffset(prevOffset => {
-  //     const newOffset = prevOffset + amountMs;
-  //     // Optional: Clamp the offset to a reasonable range, e.g., -30s to +30s
-  //     // return Math.max(-30000, Math.min(30000, newOffset));
-  //     return newOffset;
-  //   });
-  //   setShowControls(true); // Keep controls visible and reset timer
-  // };
-  
-  // const toggleSubtitles = () => {
-  //   const newEnabledState = !subtitlesEnabled;
-  //   setSubtitlesEnabled(newEnabledState);
-  //   // saveSubtitlesEnabledState(newEnabledState); // Persist the toggled state
-  //   if (!newEnabledState) { // If turning subtitles OFF
-  //     setSubtitleOffset(0); // Reset offset
-  //   }
-  //   setShowControls(true); // Keep controls visible
-  // };
-  
-  
-  
-    // --- End Subtitle Logic ---
+
+  // --- Subtitle Logic ---
+  const findSubtitles = useCallback(async () => {
+    if (!mediaId || loadingSubtitles) return;
+    setLoadingSubtitles(true);
+    setAvailableLanguages({});
+
+    const preferredLanguages = ['en', 'es', 'pt', 'fr', 'de', 'it', 'ja', 'ko', 'zh'];
+    const languageQueryString = preferredLanguages.join(',');
+
+    try {
+      const results = await searchSubtitles(
+        mediaId,
+        languageQueryString,
+        mediaType === 'tv' ? season : undefined,
+        mediaType === 'tv' ? episode : undefined
+      );
+
+      const bestSubtitlesByLang = {};
+      results.forEach(sub => {
+        const attr = sub.attributes;
+        if (!attr || !attr.language || !attr.files || attr.files.length === 0) {
+          return;
+        }
+
+        if (attr.foreign_parts_only === true) {
+          return;
+        }
+
+        const langCode = attr.language;
+        const fileInfo = attr.files[0];
+
+        const currentSubInfo = {
+          language: langCode,
+          languageName: getLanguageName(langCode),
+          fileId: fileInfo.file_id,
+          releaseName: attr.release,
+          downloadCount: attr.download_count || 0,
+          fps: attr.fps || -1,
+          uploaderName: attr.uploader?.name,
+          uploadDate: attr.upload_date,
+          legacySubtitleId: attr.legacy_subtitle_id,
+          moviehashMatch: attr.moviehash_match === true,
+          fromTrusted: attr.from_trusted === true,
+          hearingImpaired: attr.hearing_impaired === true,
+        };
+
+        const existingBest = bestSubtitlesByLang[langCode];
+
+        if (!existingBest) {
+          bestSubtitlesByLang[langCode] = currentSubInfo;
+        } else {
+          let newIsBetter = false;
+          if (currentSubInfo.moviehashMatch && !existingBest.moviehashMatch) {
+            newIsBetter = true;
+          } else if (!currentSubInfo.moviehashMatch && existingBest.moviehashMatch) {
+            newIsBetter = false;
+          } else {
+            if (currentSubInfo.fromTrusted && !existingBest.fromTrusted) {
+              newIsBetter = true;
+            } else if (!currentSubInfo.fromTrusted && existingBest.fromTrusted) {
+              newIsBetter = false;
+            } else {
+              if (!currentSubInfo.hearingImpaired && existingBest.hearingImpaired) {
+                newIsBetter = true;
+              } else if (currentSubInfo.hearingImpaired && !existingBest.hearingImpaired) {
+                newIsBetter = false;
+              } else {
+                if (currentSubInfo.downloadCount > existingBest.downloadCount) {
+                  newIsBetter = true;
+                }
+              }
+            }
+          }
+
+          if (newIsBetter) {
+            bestSubtitlesByLang[langCode] = currentSubInfo;
+          }
+        }
+      });
+
+      // console.log('[SUBTITLES] Available languages:', Object.keys(bestSubtitlesByLang));
+      // console.log('[SUBTITLES] Subtitle details:', Object.entries(bestSubtitlesByLang).map(([lang, info]) => ({
+      //   language: lang,
+      //   languageName: info.languageName,
+      //   releaseName: info.releaseName,
+      //   downloadCount: info.downloadCount,
+      //   fps: info.fps,
+      //   moviehashMatch: info.moviehashMatch,
+      //   fromTrusted: info.fromTrusted,
+      // })));
+
+      setAvailableLanguages(bestSubtitlesByLang);
+    } catch (err) {
+      console.error("Error searching subtitles:", err);
+    } finally {
+      setLoadingSubtitles(false);
+    }
+  }, [mediaId, mediaType, season, episode, loadingSubtitles]);
+
+  const selectSubtitle = useCallback(async (langCode) => {
+    if (!langCode) {
+      setParsedSubtitles([]);
+      setSelectedLanguage(null);
+      setCurrentSubtitleText('');
+      setSubtitlesEnabled(false);
+      saveSubtitleLanguagePreference(null);
+      return;
+    }
+
+    if (langCode === selectedLanguage) {
+      setSubtitlesEnabled(true);
+      saveSubtitleLanguagePreference(langCode);
+      return;
+    }
+
+    const bestSubtitleInfo = availableLanguages[langCode];
+    if (!bestSubtitleInfo || !bestSubtitleInfo.fileId) {
+      console.error(`Error: No valid subtitle fileId found for language: ${langCode}`);
+      setLoadingSubtitles(false);
+      return;
+    }
+
+    setLoadingSubtitles(true);
+    setSelectedLanguage(langCode);
+    setParsedSubtitles([]);
+    setCurrentSubtitleText('');
+
+    try {
+      // console.log('[SUBTITLES] Downloading subtitle file:', {
+      //   language: langCode,
+      //   fileId: bestSubtitleInfo.fileId,
+      //   releaseName: bestSubtitleInfo.releaseName,
+      //   downloadCount: bestSubtitleInfo.downloadCount,
+      //   fps: bestSubtitleInfo.fps,
+      //   moviehashMatch: bestSubtitleInfo.moviehashMatch,
+      //   fromTrusted: bestSubtitleInfo.fromTrusted,
+      // });
+
+      const srtContent = await downloadSubtitle(bestSubtitleInfo.fileId);
+
+      if (srtContent) {
+        // console.log('[SUBTITLES] Downloaded SRT content length:', srtContent.length, 'characters');
+        // console.log('[SUBTITLES] First 500 characters of SRT:\n', srtContent.substring(0, 500));
+
+        const parsed = parseSrt(srtContent);
+        // console.log('[SUBTITLES] Parsed', parsed.length, 'subtitle entries');
+
+        const parsedWithSeconds = parsed.map(line => ({
+          ...line,
+          startSeconds: timeToSeconds(line.start),
+          endSeconds: timeToSeconds(line.end),
+        }));
+
+        // if (parsedWithSeconds.length > 0) {
+        // console.log('[SUBTITLES] First subtitle:', {
+        //   text: parsedWithSeconds[0].text,
+        //   start: parsedWithSeconds[0].start,
+        //   startSeconds: parsedWithSeconds[0].startSeconds,
+        //   end: parsedWithSeconds[0].end,
+        //   endSeconds: parsedWithSeconds[0].endSeconds,
+        // });
+        // console.log('[SUBTITLES] Last subtitle:', {
+        //   text: parsedWithSeconds[parsedWithSeconds.length - 1].text,
+        //   startSeconds: parsedWithSeconds[parsedWithSeconds.length - 1].startSeconds,
+        //   endSeconds: parsedWithSeconds[parsedWithSeconds.length - 1].endSeconds,
+        // });
+        // }
+
+        setParsedSubtitles(parsedWithSeconds);
+        lastSubtitleIndexRef.current = 0;
+        setSubtitlesEnabled(true);
+        saveSubtitleLanguagePreference(langCode);
+      } else {
+        console.warn("Failed to download subtitle content.");
+        setSelectedLanguage(null);
+        setSubtitlesEnabled(false);
+        saveSubtitleLanguagePreference(null);
+      }
+    } catch (err) {
+      console.error("Error during subtitle download or parsing:", err);
+      setSelectedLanguage(null);
+      setSubtitlesEnabled(false);
+      saveSubtitleLanguagePreference(null);
+    } finally {
+      setLoadingSubtitles(false);
+    }
+  }, [selectedLanguage, availableLanguages]);
+
+  const timeToSeconds = (timeInput) => {
+    if (typeof timeInput === 'number' && !isNaN(timeInput)) {
+      return timeInput;
+    }
+
+    if (typeof timeInput !== 'string' || !timeInput) {
+      return 0;
+    }
+
+    try {
+      const timeString = timeInput;
+      const parts = timeString.split(':');
+      if (parts.length !== 3) throw new Error('Invalid time format (parts)');
+      const secondsAndMs = parts[2].split(',');
+      if (secondsAndMs.length !== 2) throw new Error('Invalid time format (ms)');
+      const hours = parseInt(parts[0], 10);
+      const minutes = parseInt(parts[1], 10);
+      const seconds = parseInt(secondsAndMs[0], 10);
+      const milliseconds = parseInt(secondsAndMs[1], 10);
+      if (isNaN(hours) || isNaN(minutes) || isNaN(seconds) || isNaN(milliseconds)) {
+        throw new Error('Invalid number parsed from string parts');
+      }
+      return hours * 3600 + minutes * 60 + seconds + milliseconds / 1000;
+    } catch (e) {
+      console.error(`Error parsing time string "${timeInput}":`, e);
+      return 0;
+    }
+  };
+
+  const lastSubtitleIndexRef = useRef(0);
+
+  const updateCurrentSubtitle = useCallback((currentPositionSeconds) => {
+    if (!subtitlesEnabled || parsedSubtitles.length === 0) {
+      if (currentSubtitleText !== '') setCurrentSubtitleText('');
+      return;
+    }
+
+    let currentSub = null;
+    const lastIdx = lastSubtitleIndexRef.current;
+
+    if (lastIdx < parsedSubtitles.length &&
+      currentPositionSeconds >= parsedSubtitles[lastIdx].startSeconds &&
+      currentPositionSeconds <= parsedSubtitles[lastIdx].endSeconds) {
+      currentSub = parsedSubtitles[lastIdx];
+    } else {
+      for (let i = Math.max(0, lastIdx - 2); i < Math.min(parsedSubtitles.length, lastIdx + 10); i++) {
+        if (currentPositionSeconds >= parsedSubtitles[i].startSeconds &&
+          currentPositionSeconds <= parsedSubtitles[i].endSeconds) {
+          currentSub = parsedSubtitles[i];
+          lastSubtitleIndexRef.current = i;
+          break;
+        }
+      }
+
+      if (!currentSub) {
+        let low = 0;
+        let high = parsedSubtitles.length - 1;
+        while (low <= high) {
+          const mid = Math.floor((low + high) / 2);
+          const sub = parsedSubtitles[mid];
+
+          if (currentPositionSeconds >= sub.startSeconds && currentPositionSeconds <= sub.endSeconds) {
+            currentSub = sub;
+            lastSubtitleIndexRef.current = mid;
+            break;
+          } else if (currentPositionSeconds < sub.startSeconds) {
+            high = mid - 1;
+          } else {
+            low = mid + 1;
+          }
+        }
+      }
+    }
+
+    let newText = currentSub ? currentSub.text : '';
+
+    if (newText) {
+      newText = newText.replace(/<br\s*\/?>/gi, '\n');
+      newText = newText.replace(/<\/?(i|b|u|font)[^>]*>/gi, '');
+      newText = newText.trim();
+    }
+
+    if (newText !== currentSubtitleText) {
+      // if (newText) {
+      //   console.log('[SUBTITLES] Displaying at', currentPositionSeconds.toFixed(2), 's:', newText.substring(0, 50));
+      // }
+      setCurrentSubtitleText(newText);
+    }
+  }, [subtitlesEnabled, parsedSubtitles, currentSubtitleText]);
+
+
+
+  // --- End Subtitle Logic ---
   // --- Episodes Viewer Modal Logic ---
   const toggleEpisodesModal = async () => {
     if (!showEpisodesModal) {
@@ -748,7 +788,7 @@ const VideoPlayerScreen = ({ route }) => {
       if (showData && showData.seasons) {
         // Filter out "Specials" (season_number 0) unless it's the only season
         const validSeasons = showData.seasons.filter(s => s.season_number > 0 || showData.seasons.length === 1);
-        
+
         const seasonsWithDetails = await Promise.all(
           validSeasons.map(async (s) => {
             const seasonDetail = await fetchSeasonDetails(mediaId, s.season_number);
@@ -821,10 +861,10 @@ const VideoPlayerScreen = ({ route }) => {
   // Scroll to current episode when episodes are loaded
   useEffect(() => {
     if (showEpisodesModal && !initialModalScrollDone && episodesForModal.length > 0 && episodeListModalRef.current) {
-      const currentEpisodeIndex = episodesForModal.findIndex(ep => 
+      const currentEpisodeIndex = episodesForModal.findIndex(ep =>
         ep.season_number === season && ep.episode_number === episode
       );
-      
+
       if (currentEpisodeIndex !== -1) {
         setTimeout(() => {
           episodeListModalRef.current?.scrollToIndex({
@@ -849,44 +889,38 @@ const VideoPlayerScreen = ({ route }) => {
 
   // --- End Episodes Viewer Modal Logic ---
 
-  
-    // --- Subtitles Modal Logic ---
-    // const toggleSubtitlesModal = async () => {
-    //   if (!showSubtitlesModal) {
-    //     if (player && isPlaying) {
-    //       try {
-    //         player.pause();
-    //       } catch (e) {
-    //         console.error("Error pausing video on subtitles modal open:", e);
-    //       }
-    //     }
-    //     try {
-    //       // Ensure landscape orientation for the modal
-    //       await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
-    //       await new Promise(resolve => setTimeout(resolve, 100)); // Small delay
-    //     } catch (e) {
-    //       console.error("Failed to lock orientation for subtitles modal:", e);
-    //     }
-    //     // Fetch available subtitle languages if not already fetched or if they might be stale
-    //     // if (Object.keys(availableLanguages).length === 0) { // Simple check for now
-    //     //   findSubtitles();
-    //     // }
-    //     setShowSubtitlesModal(true);
-    //   } else {
-    //     setShowSubtitlesModal(false);
-    //     try {
-    //       // Re-lock to landscape if it was changed by something else
-    //       await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
-    //     } catch (e) {
-    //       console.error("Failed to re-lock to LANDSCAPE on subtitles modal close:", e);
-    //     }
-    //   }
-    //   setShowControls(true); // Keep controls visible and reset timer
-    // };
-    // --- End Subtitles Modal Logic ---
+
+  // --- Subtitles Modal Logic ---
+  const toggleSubtitlesModal = async () => {
+    if (!showSubtitlesModal) {
+      if (player && isPlaying) {
+        try {
+          player.pause();
+        } catch (e) {
+          console.error("Error pausing video on subtitles modal open:", e);
+        }
+      }
+      try {
+        await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
+        await new Promise(resolve => setTimeout(resolve, 100));
+      } catch (e) {
+        console.error("Failed to lock orientation for subtitles modal:", e);
+      }
+      setShowSubtitlesModal(true);
+    } else {
+      setShowSubtitlesModal(false);
+      try {
+        await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
+      } catch (e) {
+        console.error("Failed to re-lock to LANDSCAPE on subtitles modal close:", e);
+      }
+    }
+    setShowControls(true);
+  };
+  // --- End Subtitles Modal Logic ---
   // --- Listener Handlers ---
   const lastSaveTimeRef = useRef(0);
-  
+
   // Refs for episode modal scrolling
   const seasonListModalRef = useRef(null);
   const episodeListModalRef = useRef(null);
@@ -943,7 +977,7 @@ const VideoPlayerScreen = ({ route }) => {
       saveProgress(currentEventTime);
       lastSaveTimeRef.current = now;
     }
-    // updateCurrentSubtitle(currentEventTime);
+    updateCurrentSubtitle(currentEventTime);
   };
 
   const handleDurationChange = (dur) => {
@@ -1004,7 +1038,7 @@ const VideoPlayerScreen = ({ route }) => {
 
     // Determine current buffering status from player
     const isPlayerActuallyBuffering = (typeof status === 'object' && status.isBuffering) ||
-                                  (typeof status === 'string' && status === 'loading');
+      (typeof status === 'string' && status === 'loading');
 
     if (isPlayerActuallyBuffering) {
       newIsBufferingVideoState = true;
@@ -1016,11 +1050,11 @@ const VideoPlayerScreen = ({ route }) => {
 
     // Determine if video is loaded/ready
     const isPlayerLoadedAndReady = (typeof status === 'object' && status.isLoaded && !status.isBuffering) ||
-                               (typeof status === 'string' && status === 'readyToPlay');
+      (typeof status === 'string' && status === 'readyToPlay');
 
     // Determine if video has errored or failed
     const hasPlayerErroredOrFailed = (typeof status === 'string' && (status === 'error' || status === 'failed')) ||
-                                (typeof status === 'object' && status.error); // Check for error object in status
+      (typeof status === 'object' && status.error); // Check for error object in status
 
     // Determine if video has finished
     const hasPlayerFinishedPlaying = (typeof status === 'string' && status === 'finished');
@@ -1154,13 +1188,13 @@ const VideoPlayerScreen = ({ route }) => {
     let isMounted = true;
     setIsUnmounting(false);
 
-    
-        // Reset subtitle states for new media
-        // setAvailableLanguages({});
-        // setSelectedLanguage(null);
-        // setParsedSubtitles([]);
-        // setCurrentSubtitleText('');
-        // // initialSubtitlePreferenceAppliedRef is reset in initializePlayer
+
+    // Reset subtitle states for new media
+    // setAvailableLanguages({});
+    // setSelectedLanguage(null);
+    // setParsedSubtitles([]);
+    // setCurrentSubtitleText('');
+    // // initialSubtitlePreferenceAppliedRef is reset in initializePlayer
     const setOrientationAndHideUI = async () => {
       try {
         await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
@@ -1187,40 +1221,56 @@ const VideoPlayerScreen = ({ route }) => {
       }
     };
 
-    const setupLiveStreamExtraction = async () => {
+    const setupLiveStreamExtraction = () => {
       if (!isMounted) return;
       setCurrentAttemptingSource('StreamEast');
-      
-      try {
-        const result = await extractLiveStreamM3U8(streameastUrl);
-        
-        if (!isMounted || streamExtractionComplete) {
-          return;
-        }
-        
-        if (result && result.url) {
-          setVideoUrl(result.url);
-          player.uri = result.url;
-          setStreamReferer(result.referer);
-          setCurrentPlayingSourceName('StreamEast');
+
+      extractLiveStreamM3U8(
+        streameastUrl,
+        (streamUrl, referer, sourceName) => {
+          if (!isMounted || streamExtractionComplete) {
+            return;
+          }
+          setVideoUrl(streamUrl);
+          player.uri = streamUrl;
+          setStreamReferer(referer);
+          setCurrentPlayingSourceName(sourceName);
           setStreamExtractionComplete(true);
+          setManualWebViewVisible(false);
+          setCaptchaUrl(null);
+          setCurrentWebViewConfig(null);
           setCurrentAttemptingSource(null);
           setIsLiveStream(true);
-        } else {
-          throw new Error('Failed to extract live stream URL');
+        },
+        (err, sourceName) => {
+          if (!isMounted) return;
+          console.error(`[VideoPlayerScreen] Live stream extraction error from ${sourceName}:`, err.message);
+          setError({
+            message: 'Failed to load live stream. The stream may have ended or is no longer available.',
+            isLiveStreamError: true
+          });
+          setStreamExtractionComplete(true);
+          setLoading(false);
+          setIsInitialLoading(false);
+          setCurrentAttemptingSource(null);
+          setManualWebViewVisible(false);
+          setCaptchaUrl(null);
+          setCurrentWebViewConfig(null);
+        },
+        (urlForCaptcha, sourceName) => {
+          if (!isMounted) return;
+          setCaptchaUrl(urlForCaptcha);
+          setManualWebViewVisible(true);
+        },
+        (configForAttempt, sourceName, key) => {
+          if (!isMounted) return;
+          setCurrentAttemptingSource(sourceName);
+          setCurrentWebViewConfig(configForAttempt);
+          setCurrentSourceAttemptKey(key);
+          setManualWebViewVisible(false);
+          setCaptchaUrl(null);
         }
-      } catch (err) {
-        if (!isMounted) return;
-        console.error('[VideoPlayerScreen] Live stream extraction error:', err);
-        setError({ 
-          message: 'Failed to load live stream. The stream may have ended or is no longer available.',
-          isLiveStreamError: true 
-        });
-        setStreamExtractionComplete(true);
-        setLoading(false);
-        setIsInitialLoading(false);
-        setCurrentAttemptingSource(null);
-      }
+      );
     };
 
     const setupStreamExtraction = () => {
@@ -1243,6 +1293,7 @@ const VideoPlayerScreen = ({ route }) => {
           setCaptchaUrl(null);
           setCurrentWebViewConfig(null);
           setCurrentAttemptingSource(null);
+          findSubtitles();
         },
         // onSourceError: (error, sourceName) => void
         (err, sourceName) => {
@@ -1297,7 +1348,7 @@ const VideoPlayerScreen = ({ route }) => {
 
     const initializePlayer = async () => {
       await setOrientationAndHideUI();
-      
+
       if (isLive) {
         setIsLiveStream(true);
         if (isMounted) {
@@ -1311,12 +1362,19 @@ const VideoPlayerScreen = ({ route }) => {
       const isAutoPlayEnabled = await getAutoPlaySetting();
       if (isMounted) setAutoPlayEnabled(isAutoPlayEnabled);
 
+      const savedLangPref = await getSubtitleLanguagePreference();
+      if (isMounted) {
+        preferredSubtitleLanguageLoadedRef.current = savedLangPref;
+        initialSubtitlePreferenceAppliedRef.current = false;
+      }
+
       const cachedStreamData = await getCachedStreamUrl(contentId);
       if (cachedStreamData && cachedStreamData.url && isMounted) {
         setVideoUrl(cachedStreamData.url);
         setStreamReferer(cachedStreamData.referer);
         setCurrentPlayingSourceName(cachedStreamData.sourceName);
         setStreamExtractionComplete(true);
+        findSubtitles();
       } else if (isMounted) {
         setupStreamExtraction();
       }
@@ -1352,6 +1410,14 @@ const VideoPlayerScreen = ({ route }) => {
           clearTimeout(bufferingTimeoutRef.current);
           bufferingTimeoutRef.current = null;
         }
+        if (leftSeekTimeoutRef.current) {
+          clearTimeout(leftSeekTimeoutRef.current);
+          leftSeekTimeoutRef.current = null;
+        }
+        if (rightSeekTimeoutRef.current) {
+          clearTimeout(rightSeekTimeoutRef.current);
+          rightSeekTimeoutRef.current = null;
+        }
       } catch (e) {
         console.error("Cleanup error:", e);
       }
@@ -1359,7 +1425,7 @@ const VideoPlayerScreen = ({ route }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [navigation, contentId, mediaId, mediaType, season, episode, retryAttempts, player]);
   // --- End Main Setup Effect ---
-  
+
   // --- Live Stream Error Handling ---
   useEffect(() => {
     if (error && error.isLiveStreamError) {
@@ -1378,8 +1444,8 @@ const VideoPlayerScreen = ({ route }) => {
     }
   }, [error]);
   // --- End Live Stream Error Handling ---
-  
-  
+
+
   // --- Source Selection Modal Logic ---
   const openChangeSourceModal = async () => {
     if (isInitialLoading || !player) return;
@@ -1392,7 +1458,7 @@ const VideoPlayerScreen = ({ route }) => {
 
     const sources = getActiveStreamSources();
     setAvailableSourcesList(sources);
-    
+
     const initialStatus = {};
     sources.forEach(s => { initialStatus[s.name] = 'idle'; });
     setSourceAttemptStatus(initialStatus);
@@ -1435,7 +1501,7 @@ const VideoPlayerScreen = ({ route }) => {
       }
 
       saveStreamUrl(contentId, streamUrl, referer, sourceName);
-      
+
       setStreamReferer(referer);
       setCurrentPlayingSourceName(sourceName);
       setResumeTime(currentPositionToResume);
@@ -1485,7 +1551,7 @@ const VideoPlayerScreen = ({ route }) => {
       setManualWebViewVisible(false);
       setCaptchaUrl(null);
     };
-    
+
     const onManualInterventionRequired = (urlForCaptcha, sourceName) => {
       if (isUnmounting) {
         setIsChangingSource(false);
@@ -1508,32 +1574,17 @@ const VideoPlayerScreen = ({ route }) => {
     );
   };
   // --- End Source Selection Modal Logic ---
-  // Effect to call findSubtitles when a non-cached stream becomes ready,
-  // to facilitate auto-application of subtitle preference.
-  // useEffect(() => {
-  //   if (videoUrl && streamExtractionComplete &&
-  //       Object.keys(availableLanguages).length === 0 &&
-  //       !loadingSubtitles && !initialSubtitlePreferenceAppliedRef.current) {
-  //     // If video is ready from extraction (not cache), and we haven't fetched subs yet,
-  //     // and haven't tried applying preference (which implies subs weren't fetched for it).
-  //     // findSubtitles();
-  //   }
-  // }, [videoUrl, streamExtractionComplete, availableLanguages, loadingSubtitles]); // findSubtitles
 
-  // // Effect to apply loaded subtitle preference once languages are available
-  // useEffect(() => {
-  //   const prefLang = preferredSubtitleLanguageLoadedRef.current;
+  useEffect(() => {
+    const prefLang = preferredSubtitleLanguageLoadedRef.current;
 
-  //   if (player && Object.keys(availableLanguages).length > 0 && !initialSubtitlePreferenceAppliedRef.current) {
-  //     if (prefLang !== null && availableLanguages[prefLang]) {
-  //       // selectSubtitle(prefLang); // This will also save the preference again, which is fine.
-  //     } else if (prefLang === null) {
-  //       // selectSubtitle(null); // Ensure "None" is selected if that's the preference
-  //     }
-  //     // Mark as attempted regardless of success to prevent re-application for this media load
-  //     initialSubtitlePreferenceAppliedRef.current = true;
-  //   }
-  // }, [availableLanguages, player]); // selectSubtitle
+    if (Object.keys(availableLanguages).length > 0 && !initialSubtitlePreferenceAppliedRef.current) {
+      if (prefLang !== null && availableLanguages[prefLang]) {
+        selectSubtitle(prefLang);
+      }
+      initialSubtitlePreferenceAppliedRef.current = true;
+    }
+  }, [availableLanguages, selectSubtitle]);
 
   // --- Corrective Effect for Stuck Buffering Spinner ---
   useEffect(() => {
@@ -1592,6 +1643,19 @@ const VideoPlayerScreen = ({ route }) => {
     }
   };
 
+  const toggleMute = async () => {
+    try {
+      if (player) {
+        const newMutedState = !isMuted;
+        player.muted = newMutedState;
+        setIsMuted(newMutedState);
+      }
+      setShowControls(true);
+    } catch (error) {
+      console.error('Error toggling mute:', error);
+    }
+  };
+
   const seekBackward = async () => {
     try {
       if (player) {
@@ -1620,7 +1684,7 @@ const VideoPlayerScreen = ({ route }) => {
     if (isUnmounting) return;
     setIsUnmounting(true);
     try {
-      if (!isEndOfSeries) {
+      if (!isEndOfSeries && !isLiveStream) {
         saveProgress(position);
       }
       if (player) {
@@ -1635,17 +1699,15 @@ const VideoPlayerScreen = ({ route }) => {
           // Use a slight delay to allow orientation change to settle
           setTimeout(() => {
             try {
-              navRef.replace('DetailScreen', { mediaId: mediaId, mediaType: mediaType, title: title });
-              // if (navRef.canGoBack()) {
-              //   navRef.goBack();
-              // } else {
-              //   // If cannot go back (e.g., deep link), navigate to a default screen
-              //   navRef.navigate('Home');
-              // }
+              if (isLiveStream) {
+                navRef.replace('MainTabs');
+              } else {
+                navRef.replace('DetailScreen', { mediaId: mediaId, mediaType: mediaType, title: title });
+              }
             } catch (e) {
               console.error("Navigation error:", e);
               // Fallback navigation if goBack fails unexpectedly
-              try { navRef.replace('Home'); } catch (e2) { }
+              try { navRef.replace('MainTabs'); } catch (e2) { }
             }
           }, 300);
         });
@@ -1654,9 +1716,9 @@ const VideoPlayerScreen = ({ route }) => {
       // Fallback navigation if main try block fails
       const navRef = navigationRef.current;
       if (!navRef) return;
-      try { navRef.navigate('Home'); } catch (e2) { }
+      try { navRef.navigate('MainTabs'); } catch (e2) { }
     }
-  }, [isUnmounting, player, position, navigationRef]); // Adjusted dependencies
+  }, [isUnmounting, player, position, navigationRef, isLiveStream, mediaId, mediaType, title]); // Adjusted dependencies
 
   const handleReload = async () => {
     if (bufferingTimeoutRef.current) {
@@ -1825,40 +1887,145 @@ const VideoPlayerScreen = ({ route }) => {
     }).start();
   }, [isZoomed, videoNaturalSize, screenDimensions, animatedScale]);
 
+  // --- Double Tap Seek Functions ---
+  const handleDoubleTapLeft = useCallback(() => {
+    if (player && !isLiveStream) {
+      let seekAmount = leftSeekAmount <= -60 ? -30 : -10;
+      player.seekBy(seekAmount);
+
+      if (leftSeekTimeoutRef.current) {
+        clearTimeout(leftSeekTimeoutRef.current);
+      }
+
+      setLeftSeekAmount(prev => prev + seekAmount);
+
+      leftArrowTranslate.setValue(0);
+
+      Animated.parallel([
+        Animated.timing(leftSeekOpacity, {
+          toValue: 1,
+          duration: 150,
+          useNativeDriver: true,
+        }),
+        Animated.timing(leftArrowTranslate, {
+          toValue: -10,
+          duration: 100,
+          useNativeDriver: true,
+        })
+      ]).start();
+
+      leftSeekTimeoutRef.current = setTimeout(() => {
+        Animated.timing(leftSeekOpacity, {
+          toValue: 0,
+          duration: 300,
+          useNativeDriver: true,
+        }).start(() => {
+          setLeftSeekAmount(0);
+          leftArrowTranslate.setValue(0);
+        });
+      }, 800);
+    }
+  }, [player, isLiveStream, leftSeekOpacity, leftArrowTranslate, leftSeekAmount]);
+
+  const handleDoubleTapRight = useCallback(() => {
+    if (player && !isLiveStream) {
+      let seekAmount = rightSeekAmount >= 60 ? 30 : 10;
+      player.seekBy(seekAmount);
+
+      if (rightSeekTimeoutRef.current) {
+        clearTimeout(rightSeekTimeoutRef.current);
+      }
+
+      setRightSeekAmount(prev => prev + seekAmount);
+
+      rightArrowTranslate.setValue(0);
+
+      Animated.parallel([
+        Animated.timing(rightSeekOpacity, {
+          toValue: 1,
+          duration: 150,
+          useNativeDriver: true,
+        }),
+        Animated.timing(rightArrowTranslate, {
+          toValue: 10,
+          duration: 100,
+          useNativeDriver: true,
+        })
+      ]).start();
+
+      rightSeekTimeoutRef.current = setTimeout(() => {
+        Animated.timing(rightSeekOpacity, {
+          toValue: 0,
+          duration: 300,
+          useNativeDriver: true,
+        }).start(() => {
+          setRightSeekAmount(0);
+          rightArrowTranslate.setValue(0);
+        });
+      }, 800);
+    }
+  }, [player, isLiveStream, rightSeekOpacity, rightArrowTranslate, rightSeekAmount]);
+  // --- End Double Tap Seek Functions ---
+
   // --- Combined Gestures for Tap and Pinch ---
-  const tapToToggleControls = Gesture.Tap()
-    .maxDuration(250) // Optional: to distinguish from long press, etc.
+  const doubleTapSeek = useMemo(() => Gesture.Tap()
+    .numberOfTaps(2)
+    .maxDuration(250)
+    .maxDistance(100)
+    .onEnd((event, success) => {
+      if (success) {
+        if (event.x < screenDimensions.width / 2) {
+          runOnJS(handleDoubleTapLeft)();
+        } else {
+          runOnJS(handleDoubleTapRight)();
+        }
+      }
+    }), [handleDoubleTapLeft, handleDoubleTapRight, screenDimensions.width]);
+
+  const tapToToggleControls = useMemo(() => Gesture.Tap()
+    .numberOfTaps(1)
+    .maxDuration(250)
     .onEnd((_event, success) => {
       if (success) {
-        runOnJS(toggleControls)(); // Ensure toggleControls (which calls setShowControls) runs on JS thread
+        runOnJS(toggleControls)();
       }
-    });
+    }), [toggleControls]);
 
-  const pinchToZoom = Gesture.Pinch()
+  const pinchToZoom = useMemo(() => Gesture.Pinch()
     .onEnd((event) => {
-      if (event.scale > 1.1) { // Pinching outwards
+      if (event.scale > 1.1) {
         if (!isZoomed) {
           setIsZoomed(true);
         }
-      } else if (event.scale < 0.9) { // Pinching inwards
+      } else if (event.scale < 0.9) {
         if (isZoomed) {
           setIsZoomed(false);
         }
       }
-      // Ensure controls are visible and timer is reset after a pinch
       if (!showControls) {
-        setShowControls(true); // This will also trigger startControlsTimer via useEffect
+        setShowControls(true);
       } else {
-        startControlsTimer(); // If controls already shown, just reset the timer
+        startControlsTimer();
       }
-    });
+    }), [isZoomed, showControls, startControlsTimer]);
 
-  // Use Gesture.Race to ensure only one gesture (tap or pinch) is active at a time.
-  // Pinch typically involves more movement, so it might naturally win if both start.
-  // If a simple tap occurs, tapToToggleControls will activate.
-  // If a pinch occurs, pinchToZoom will activate.
-  const videoAreaGestures = Gesture.Race(pinchToZoom, tapToToggleControls);
+  const videoAreaGestures = useMemo(() => Gesture.Race(
+    pinchToZoom,
+    Gesture.Exclusive(doubleTapSeek, tapToToggleControls)
+  ), [pinchToZoom, doubleTapSeek, tapToToggleControls]);
   // --- End Pinch to Zoom Logic ---
+
+  // --- Memoized Subtitle Rendering ---
+  const subtitleOverlay = useMemo(() => {
+    if (!subtitlesEnabled || !currentSubtitleText) return null;
+
+    return (
+      <View style={styles.subtitleTextContainer} pointerEvents="none">
+        <Text style={styles.subtitleText}>{currentSubtitleText}</Text>
+      </View>
+    );
+  }, [subtitlesEnabled, currentSubtitleText]);
+  // --- End Memoized Subtitle Rendering ---
 
   // --- Buffering Alert Modal ---
   const handleKeepBuffering = () => {
@@ -1912,206 +2079,206 @@ const VideoPlayerScreen = ({ route }) => {
 
   // --- Render ---
 
-// const renderSubtitleSelectionModal = () => ( ... ); // Removed entire function
+  // const renderSubtitleSelectionModal = () => ( ... ); // Removed entire function
 
-const renderEpisodesModal = () => {
-  if (mediaType !== 'tv') return null;
+  const renderEpisodesModal = () => {
+    if (mediaType !== 'tv') return null;
 
-  const renderEpisodeItem = ({ item: episodeData }) => {
-    const progress = episodeData.watchProgress;
-    let progressPercent = 0;
-    if (progress && progress.duration > 0 && progress.position > 0) {
-      progressPercent = (progress.position / progress.duration); // Value between 0 and 1
-    }
+    const renderEpisodeItem = ({ item: episodeData }) => {
+      const progress = episodeData.watchProgress;
+      let progressPercent = 0;
+      if (progress && progress.duration > 0 && progress.position > 0) {
+        progressPercent = (progress.position / progress.duration); // Value between 0 and 1
+      }
 
-    const episodePoster = episodeData.still_path
-      ? `https://image.tmdb.org/t/p/w300${episodeData.still_path}`
-      : null;
+      const episodePoster = episodeData.still_path
+        ? `https://image.tmdb.org/t/p/w300${episodeData.still_path}`
+        : null;
 
-    const isCurrentEpisode = season === episodeData.season_number && episode === episodeData.episode_number;
-    const runtimeString = formatRuntime(episodeData.runtime);
-    const isEpisodeUnreleased = isFutureDate(episodeData.air_date);
+      const isCurrentEpisode = season === episodeData.season_number && episode === episodeData.episode_number;
+      const runtimeString = formatRuntime(episodeData.runtime);
+      const isEpisodeUnreleased = isFutureDate(episodeData.air_date);
+
+      return (
+        <TouchableOpacity
+          style={[
+            styles.episodeItemHorizontal,
+            isCurrentEpisode && styles.currentEpisodeItemHorizontal
+          ]}
+          onPress={() => {
+            if (isCurrentEpisode) {
+              setShowEpisodesModal(false);
+              return;
+            }
+            setIsUnmounting(true);
+            if (player) player.pause();
+            navigation.replace('VideoPlayer', {
+              mediaId: mediaId,
+              mediaType: 'tv',
+              season: episodeData.season_number,
+              episode: episodeData.episode_number,
+              title: title,
+              episodeTitle: episodeData.name,
+              poster_path: poster_path,
+              air_date: episodeData.air_date,
+            });
+          }}
+        >
+          <View style={styles.episodeThumbnailContainerHorizontal}>
+            {episodePoster ? (
+              <Image source={{ uri: episodePoster }} style={styles.episodeThumbnailHorizontal} />
+            ) : (
+              <View style={[styles.episodeThumbnailHorizontal, styles.placeholderThumbnailHorizontal]}>
+                <Ionicons name="image-outline" size={40} color="#555" />
+              </View>
+            )}
+            {isEpisodeUnreleased && (
+              <View style={styles.unreleasedBadgeContainer}>
+                <View style={styles.unreleasedBadge}>
+                  <Text style={styles.unreleasedBadgeText}>UNRELEASED</Text>
+                </View>
+              </View>
+            )}
+            {progressPercent > 0 && progressPercent < 1 && !isEpisodeUnreleased && (
+              <View style={styles.episodeProgressOverlayHorizontal}>
+                <View style={[styles.episodeProgressBarHorizontal, { width: `${progressPercent * 100}%` }]} />
+              </View>
+            )}
+            {progressPercent >= 1 && !isEpisodeUnreleased && (
+              <View style={styles.watchedOverlayHorizontal}>
+                <Ionicons name="checkmark-circle" size={30} color="rgba(255, 255, 255, 0.9)" />
+              </View>
+            )}
+          </View>
+          <View style={styles.episodeDetailsHorizontal}>
+            <Text style={styles.episodeTitleTextHorizontal} numberOfLines={2}>
+              {`E${episodeData.episode_number}: ${episodeData.name || `Episode ${episodeData.episode_number}`}`}
+            </Text>
+            <Text style={styles.episodeOverviewTextHorizontal} numberOfLines={3}>
+              {episodeData.overview || 'No overview available.'}
+            </Text>
+          </View>
+        </TouchableOpacity>
+      );
+    };
 
     return (
-      <TouchableOpacity
-        style={[
-          styles.episodeItemHorizontal,
-          isCurrentEpisode && styles.currentEpisodeItemHorizontal
-        ]}
-        onPress={() => {
-          if (isCurrentEpisode) {
-            setShowEpisodesModal(false);
-            return;
+      <Modal
+        animationType="fade"
+        transparent={true}
+        visible={showEpisodesModal}
+        presentationStyle="overFullScreen"
+        supportedOrientations={['landscape', 'landscape-left', 'landscape-right']}
+        onShow={async () => {
+          try {
+            await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
+          } catch (e) {
+            console.error("Episodes Modal onShow: Failed to lock orientation:", e);
           }
-          setIsUnmounting(true);
-          if (player) player.pause();
-          navigation.replace('VideoPlayer', {
-            mediaId: mediaId,
-            mediaType: 'tv',
-            season: episodeData.season_number,
-            episode: episodeData.episode_number,
-            title: title,
-            episodeTitle: episodeData.name,
-            poster_path: poster_path,
-            air_date: episodeData.air_date,
-          });
+        }}
+        onRequestClose={() => {
+          setShowEpisodesModal(false);
+          ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE)
+            .catch(e => console.error("Failed to re-lock orientation on episodes modal close:", e));
         }}
       >
-        <View style={styles.episodeThumbnailContainerHorizontal}>
-          {episodePoster ? (
-            <Image source={{ uri: episodePoster }} style={styles.episodeThumbnailHorizontal} />
-          ) : (
-            <View style={[styles.episodeThumbnailHorizontal, styles.placeholderThumbnailHorizontal]}>
-              <Ionicons name="image-outline" size={40} color="#555" />
+        <View style={styles.episodesModalOverlay}>
+          <View style={styles.episodesModalContent}>
+            <View style={styles.episodesModalHeader}>
+              <Text style={styles.episodesModalTitle}>{title} - Episodes</Text>
+              <TouchableOpacity onPress={() => setShowEpisodesModal(false)} style={styles.episodesModalCloseButton}>
+                <Ionicons name="close" size={28} color="white" />
+              </TouchableOpacity>
             </View>
-          )}
-          {isEpisodeUnreleased && (
-            <View style={styles.unreleasedBadgeContainer}>
-              <View style={styles.unreleasedBadge}>
-                <Text style={styles.unreleasedBadgeText}>UNRELEASED</Text>
-              </View>
-            </View>
-          )}
-          {progressPercent > 0 && progressPercent < 1 && !isEpisodeUnreleased && (
-            <View style={styles.episodeProgressOverlayHorizontal}>
-              <View style={[styles.episodeProgressBarHorizontal, { width: `${progressPercent * 100}%` }]} />
-            </View>
-          )}
-          {progressPercent >= 1 && !isEpisodeUnreleased && (
-            <View style={styles.watchedOverlayHorizontal}>
-              <Ionicons name="checkmark-circle" size={30} color="rgba(255, 255, 255, 0.9)" />
-            </View>
-          )}
-        </View>
-        <View style={styles.episodeDetailsHorizontal}>
-          <Text style={styles.episodeTitleTextHorizontal} numberOfLines={2}>
-            {`E${episodeData.episode_number}: ${episodeData.name || `Episode ${episodeData.episode_number}`}`}
-          </Text>
-          <Text style={styles.episodeOverviewTextHorizontal} numberOfLines={3}>
-            {episodeData.overview || 'No overview available.'}
-          </Text>
-        </View>
-      </TouchableOpacity>
-    );
-  };
 
-  return (
-    <Modal
-      animationType="fade"
-      transparent={true}
-      visible={showEpisodesModal}
-      presentationStyle="overFullScreen"
-      supportedOrientations={['landscape', 'landscape-left', 'landscape-right']}
-      onShow={async () => {
-        try {
-          await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
-        } catch (e) {
-          console.error("Episodes Modal onShow: Failed to lock orientation:", e);
-        }
-      }}
-      onRequestClose={() => {
-        setShowEpisodesModal(false);
-        ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE)
-          .catch(e => console.error("Failed to re-lock orientation on episodes modal close:", e));
-      }}
-    >
-      <View style={styles.episodesModalOverlay}>
-        <View style={styles.episodesModalContent}>
-          <View style={styles.episodesModalHeader}>
-            <Text style={styles.episodesModalTitle}>{title} - Episodes</Text>
-            <TouchableOpacity onPress={() => setShowEpisodesModal(false)} style={styles.episodesModalCloseButton}>
-              <Ionicons name="close" size={28} color="white" />
-            </TouchableOpacity>
-          </View>
-
-          {isLoadingModalEpisodes && !allSeasonsData.length ? (
-            <ActivityIndicator size="large" color="#E50914" style={{ flex: 1 }} />
-          ) : (
-            <>
-              {allSeasonsData.length > 1 && ( // Only show season tabs if more than one season
-                <View style={styles.seasonSelectorContainer}>
+            {isLoadingModalEpisodes && !allSeasonsData.length ? (
+              <ActivityIndicator size="large" color="#E50914" style={{ flex: 1 }} />
+            ) : (
+              <>
+                {allSeasonsData.length > 1 && ( // Only show season tabs if more than one season
+                  <View style={styles.seasonSelectorContainer}>
+                    <FlatList
+                      ref={seasonListModalRef}
+                      horizontal
+                      data={allSeasonsData.sort((a, b) => a.season_number - b.season_number)}
+                      renderItem={({ item: seasonItem }) => (
+                        <TouchableOpacity
+                          style={[
+                            styles.seasonTab,
+                            selectedSeasonForModal === seasonItem.season_number && styles.seasonTabSelected,
+                          ]}
+                          onPress={() => handleSelectSeasonForModal(seasonItem.season_number)}
+                        >
+                          <Text style={styles.seasonTabText}>
+                            {seasonItem.name || `Season ${seasonItem.season_number}`}
+                          </Text>
+                        </TouchableOpacity>
+                      )}
+                      keyExtractor={(item) => `season-tab-${item.id || item.season_number}`}
+                      showsHorizontalScrollIndicator={false}
+                      contentContainerStyle={styles.seasonTabContentContainer}
+                      getItemLayout={(data, index) => ({
+                        length: 130, // Approximate width of a season tab
+                        offset: 130 * index,
+                        index,
+                      })}
+                      onScrollToIndexFailed={(info) => {
+                        // Fallback for when layout isn't ready
+                        const wait = new Promise(resolve => setTimeout(resolve, 200));
+                        wait.then(() => {
+                          seasonListModalRef.current?.scrollToOffset({
+                            offset: info.averageItemLength * info.index,
+                            animated: true,
+                          });
+                        });
+                      }}
+                    />
+                  </View>
+                )}
+                {isLoadingModalEpisodes && episodesForModal.length === 0 ? (
+                  <View style={styles.centeredLoader}>
+                    <ActivityIndicator size="large" color="#E50914" />
+                  </View>
+                ) : episodesForModal.length > 0 ? (
                   <FlatList
-                    ref={seasonListModalRef}
-                    horizontal
-                    data={allSeasonsData.sort((a, b) => a.season_number - b.season_number)}
-                    renderItem={({ item: seasonItem }) => (
-                      <TouchableOpacity
-                        style={[
-                          styles.seasonTab,
-                          selectedSeasonForModal === seasonItem.season_number && styles.seasonTabSelected,
-                        ]}
-                        onPress={() => handleSelectSeasonForModal(seasonItem.season_number)}
-                      >
-                        <Text style={styles.seasonTabText}>
-                          {seasonItem.name || `Season ${seasonItem.season_number}`}
-                        </Text>
-                      </TouchableOpacity>
-                    )}
-                    keyExtractor={(item) => `season-tab-${item.id || item.season_number}`}
+                    ref={episodeListModalRef}
+                    horizontal // Changed to horizontal
+                    data={episodesForModal.sort((a, b) => a.episode_number - b.episode_number)}
+                    renderItem={renderEpisodeItem}
+                    keyExtractor={(item) => `ep-${item.id || (item.season_number + '_' + item.episode_number)}`}
                     showsHorizontalScrollIndicator={false}
-                    contentContainerStyle={styles.seasonTabContentContainer}
+                    contentContainerStyle={styles.episodesListContentHorizontal}
+                    initialNumToRender={3}
+                    maxToRenderPerBatch={5}
+                    windowSize={7}
                     getItemLayout={(data, index) => ({
-                      length: 130, // Approximate width of a season tab
-                      offset: 130 * index,
+                      length: 195, // Episode item width (180) + marginRight (15)
+                      offset: 195 * index,
                       index,
                     })}
                     onScrollToIndexFailed={(info) => {
                       // Fallback for when layout isn't ready
                       const wait = new Promise(resolve => setTimeout(resolve, 200));
                       wait.then(() => {
-                        seasonListModalRef.current?.scrollToOffset({
+                        episodeListModalRef.current?.scrollToOffset({
                           offset: info.averageItemLength * info.index,
                           animated: true,
                         });
                       });
                     }}
                   />
-                </View>
-              )}
-              {isLoadingModalEpisodes && episodesForModal.length === 0 ? (
-                  <View style={styles.centeredLoader}>
-                    <ActivityIndicator size="large" color="#E50914" />
+                ) : (
+                  <View style={styles.centeredMessage}>
+                    <Text style={styles.noEpisodesText}>No episodes found for this season.</Text>
                   </View>
-              ) : episodesForModal.length > 0 ? (
-                <FlatList
-                  ref={episodeListModalRef}
-                  horizontal // Changed to horizontal
-                  data={episodesForModal.sort((a, b) => a.episode_number - b.episode_number)}
-                  renderItem={renderEpisodeItem}
-                  keyExtractor={(item) => `ep-${item.id || (item.season_number + '_' + item.episode_number)}`}
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.episodesListContentHorizontal}
-                  initialNumToRender={3}
-                  maxToRenderPerBatch={5}
-                  windowSize={7}
-                  getItemLayout={(data, index) => ({
-                    length: 195, // Episode item width (180) + marginRight (15)
-                    offset: 195 * index,
-                    index,
-                  })}
-                  onScrollToIndexFailed={(info) => {
-                    // Fallback for when layout isn't ready
-                    const wait = new Promise(resolve => setTimeout(resolve, 200));
-                    wait.then(() => {
-                      episodeListModalRef.current?.scrollToOffset({
-                        offset: info.averageItemLength * info.index,
-                        animated: true,
-                      });
-                    });
-                  }}
-                />
-              ) : (
-                <View style={styles.centeredMessage}>
-                  <Text style={styles.noEpisodesText}>No episodes found for this season.</Text>
-                </View>
-              )}
-            </>
-          )}
+                )}
+              </>
+            )}
+          </View>
         </View>
-      </View>
-    </Modal>
-  );
-};
+      </Modal>
+    );
+  };
 
   const renderNextEpisodeButton = () => {
     // If findNextEpisode hasn't completed (i.e., data isn't ready), don't show anything.
@@ -2124,8 +2291,8 @@ const renderEpisodesModal = () => {
 
     const isWithinFortyFiveSecondWindow = duration > 0 && timeLeft < VIDEO_END_THRESHOLD_SECONDS;
     const isWithinTwoMinuteWindowButNotFortyFive = duration > 0 &&
-                                               timeLeft < TWO_MINUTE_THRESHOLD_SECONDS &&
-                                               timeLeft >= VIDEO_END_THRESHOLD_SECONDS;
+      timeLeft < TWO_MINUTE_THRESHOLD_SECONDS &&
+      timeLeft >= VIDEO_END_THRESHOLD_SECONDS;
 
     // Determine if the button should be rendered at all based on time windows and data readiness
     if (!showNextEpisodeButton || (!isWithinFortyFiveSecondWindow && !isWithinTwoMinuteWindowButNotFortyFive)) {
@@ -2165,147 +2332,169 @@ const renderEpisodesModal = () => {
       <View style={styles.container} onLayout={onLayoutRootView}>
         <StatusBar hidden />
 
-      {/* WebView for stream extraction / CAPTCHA - uses currentWebViewConfig */}
-      {currentWebViewConfig && !streamExtractionComplete && (
-        <View style={(manualWebViewVisible || __DEV__) ? styles.visibleWebViewForCaptcha : styles.hiddenWebView}>
-          <WebView
-            key={currentSourceAttemptKey} // Use the attempt key to force re-mount
-            source={manualWebViewVisible && captchaUrl ? { uri: captchaUrl, headers: currentWebViewConfig.source.headers } : currentWebViewConfig.source}
-            injectedJavaScript={currentWebViewConfig.injectedJavaScript}
-            onMessage={currentWebViewConfig.onMessage}
-            onError={currentWebViewConfig.onError} // Directly use the one from the current config
-            onHttpError={currentWebViewConfig.onHttpError} // Directly use
-            javaScriptEnabled={true}
-            domStorageEnabled={true}
-            allowsInlineMediaPlayback={true}
-            mediaPlaybackRequiresUserAction={false}
-            originWhitelist={['*']}
-            mixedContentMode="compatibility"
-            incognito={true}
-            thirdPartyCookiesEnabled={false}
-            onShouldStartLoadWithRequest={() => true}
-            injectedJavaScriptBeforeContentLoaded={injectedJavaScript} // General JS, not source-specific
-          />
-        </View>
-      )}
-
-      {/* Initial Loading */}
-      {isInitialLoading && (
-        <View style={styles.loaderContainer}>
-          <SafeAreaView style={styles.loadingBackButtonContainer}>
-            <TouchableOpacity onPress={() => handleGoBack()} style={styles.backButton}>
-              <Ionicons name="arrow-back" size={24} color="white" />
-            </TouchableOpacity>
-          </SafeAreaView>
-          <ActivityIndicator size="large" color="#E50914" />
-          <Text style={styles.loadingText}>
-            {manualWebViewVisible ? 'Please complete the CAPTCHA below.' :
-             streamExtractionComplete ? 'Loading video...' :
-             currentAttemptingSource ? `Extracting from ${currentAttemptingSource}...` : 'Initializing stream extraction...'}
-          </Text>
-          {!streamExtractionComplete && !manualWebViewVisible && currentAttemptingSource && (
-            <Text style={styles.loadingSubText}>
-              Trying source: {currentAttemptingSource}. This may take a moment...
-            </Text>
-          )}
-          {manualWebViewVisible && (
-            <>
-              <Text style={styles.captchaInfoText}>
-                If you see this often, a VPN or network issue might be the cause.
-              </Text>
-              <TouchableOpacity style={styles.captchaDoneButton} onPress={() => {
-               // This button doesn't directly trigger stream finding,
-               // but user might click it after solving.
-               // The injected JS should still post a message when the stream is found.
-               // For now, just hides the CAPTCHA view and hopes for the best.
-               // A more robust solution might involve re-triggering aspects of the WebView.
-               setManualWebViewVisible(false);
-               // Optionally, could add a small delay then re-check if stream was found, or show a "Still trying..."
-             }}>
-               <Text style={styles.captchaDoneButtonText}>I've clicked it / Close</Text>
-             </TouchableOpacity>
-            </>
-          )}
-        </View>
-      )}
-
-      {/* Error Display */}
-      {error && (
-        <View style={styles.errorContainer}>
-          {/* ... existing error content ... */}
-          <Text style={styles.errorText}>Error loading video.</Text>
-          <Text style={styles.errorDetail}>{error.message || "Check connection"}</Text>
-          <TouchableOpacity style={styles.retryButton} onPress={handleReload}>
-            <Text style={styles.retryButtonText}>Retry</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.goBackButton} onPress={() => handleGoBack()}>
-            <Text style={styles.goBackButtonText}>Go Back</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-
-      {/* Video Player */}
-      {videoUrl && (
-        <GestureDetector gesture={videoAreaGestures}>
-          <Animated.View
-            style={[
-              styles.video, // This style should make the Animated.View fill the available video area.
-              { transform: [{ scale: animatedScale }] }
-            ]}
-          >
-            <VideoView
-              player={player}
-              style={StyleSheet.absoluteFill} // VideoView fills the scaled Animated.View
-              nativeControls={false}
-              allowsPictureInPicture={true}
-              allowsVideoFrameAnalysis={false}
-              startsPictureInPictureAutomatically={true}
-              resizeMode="contain" // Base resize mode is contain
-              // pointerEvents="none" // Prevent VideoView from interfering with gestures on parent Animated.View
+        {/* WebView for stream extraction / CAPTCHA - uses currentWebViewConfig */}
+        {currentWebViewConfig && !streamExtractionComplete && (
+          <View style={(manualWebViewVisible || __DEV__) ? styles.visibleWebViewForCaptcha : styles.hiddenWebView}>
+            <WebView
+              key={currentSourceAttemptKey} // Use the attempt key to force re-mount
+              source={manualWebViewVisible && captchaUrl ? { uri: captchaUrl, headers: currentWebViewConfig.source.headers } : currentWebViewConfig.source}
+              injectedJavaScript={currentWebViewConfig.injectedJavaScript}
+              onMessage={currentWebViewConfig.onMessage}
+              onError={currentWebViewConfig.onError} // Directly use the one from the current config
+              onHttpError={currentWebViewConfig.onHttpError} // Directly use
+              userAgent={currentWebViewConfig.userAgent}
+              javaScriptEnabled={true}
+              domStorageEnabled={true}
+              allowsInlineMediaPlayback={true}
+              mediaPlaybackRequiresUserAction={false}
+              originWhitelist={['*']}
+              mixedContentMode="compatibility"
+              incognito={false}
+              thirdPartyCookiesEnabled={true}
+              sharedCookiesEnabled={true}
+              injectedJavaScriptForMainFrameOnly={false}
+              injectedJavaScriptBeforeContentLoadedForMainFrameOnly={false}
+              onShouldStartLoadWithRequest={(() => true)}
+              injectedJavaScriptBeforeContentLoaded={currentWebViewConfig.injectedJavaScriptBeforeContentLoaded || injectedJavaScript}
             />
-          </Animated.View>
-        </GestureDetector>
-      )}
+          </View>
+        )}
 
-      
-            {/* Subtitle Text Display */}
-            {/* {subtitlesEnabled && currentSubtitleText ? (
-              <View style={styles.subtitleTextContainer} pointerEvents="none">
-                <Text style={styles.subtitleText}>{currentSubtitleText}</Text>
-              </View>
-            ) : null} */}
-          {/* Buffering Indicator */}
-          {isBufferingVideo && !isInitialLoading && (
-            <View style={styles.bufferingIndicatorContainer}>
-              <ActivityIndicator size="large" color="#FFF" />
-            </View>
-          )}
-
-
-      {/* Black Transparent Overlay */}
-      <Animated.View style={[styles.overlayBackground, { opacity: opacityAnim }]} pointerEvents="none" />
-
-      {/* Controls Wrapper (Fades out) */}
-      <Animated.View style={[styles.controlsWrapper, { opacity: opacityAnim, pointerEvents: showControls ? 'box-none' : 'none' }]}>
-        <>
-          {/* Top Controls */}
-          <SafeAreaView style={styles.controlsContainer}>
-            <TouchableOpacity onPress={() => handleGoBack()} style={styles.backButton}>
-              <Ionicons name="arrow-back" size={24} color="white" />
-            </TouchableOpacity>
-            <View style={styles.titleContainer}>
-              <Text style={styles.titleText} numberOfLines={1}>
-                {title}
-                {mediaType === 'tv' && episodeTitle ? ` - ${episodeTitle}` : ''}
-                {mediaType === 'tv' && (
-                  <Text style={styles.seasonEpisodeText}>{` (S${season}:E${episode})`}</Text>
-                )}
+        {/* Initial Loading */}
+        {isInitialLoading && (
+          <View style={styles.loaderContainer}>
+            <SafeAreaView style={styles.loadingBackButtonContainer}>
+              <TouchableOpacity onPress={() => handleGoBack()} style={styles.backButton}>
+                <Ionicons name="arrow-back" size={24} color="white" />
+              </TouchableOpacity>
+            </SafeAreaView>
+            <ActivityIndicator size="large" color="#E50914" />
+            <Text style={styles.loadingText}>
+              {manualWebViewVisible ? 'Please complete the CAPTCHA below.' :
+                streamExtractionComplete ? 'Loading video...' :
+                  currentAttemptingSource ? `Extracting from ${currentAttemptingSource}...` : 'Initializing stream extraction...'}
+            </Text>
+            {!streamExtractionComplete && !manualWebViewVisible && currentAttemptingSource && (
+              <Text style={styles.loadingSubText}>
+                Trying source: {currentAttemptingSource}. This may take a moment...
               </Text>
+            )}
+            {manualWebViewVisible && (
+              <>
+                <Text style={styles.captchaInfoText}>
+                  If you see this often, a VPN or network issue might be the cause.
+                </Text>
+                <TouchableOpacity style={styles.captchaDoneButton} onPress={() => {
+                  // This button doesn't directly trigger stream finding,
+                  // but user might click it after solving.
+                  // The injected JS should still post a message when the stream is found.
+                  // For now, just hides the CAPTCHA view and hopes for the best.
+                  // A more robust solution might involve re-triggering aspects of the WebView.
+                  setManualWebViewVisible(false);
+                  // Optionally, could add a small delay then re-check if stream was found, or show a "Still trying..."
+                }}>
+                  <Text style={styles.captchaDoneButtonText}>I've clicked it / Close</Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </View>
+        )}
+
+        {/* Error Display */}
+        {error && (
+          <View style={styles.errorContainer}>
+            {/* ... existing error content ... */}
+            <Text style={styles.errorText}>Error loading video.</Text>
+            <Text style={styles.errorDetail}>{error.message || "Check connection"}</Text>
+            <TouchableOpacity style={styles.retryButton} onPress={handleReload}>
+              <Text style={styles.retryButtonText}>Retry</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.goBackButton} onPress={() => handleGoBack()}>
+              <Text style={styles.goBackButtonText}>Go Back</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Video Player */}
+        {videoUrl && (
+          <GestureDetector gesture={videoAreaGestures}>
+            <Animated.View
+              style={[
+                styles.video, // This style should make the Animated.View fill the available video area.
+                { transform: [{ scale: animatedScale }] }
+              ]}
+            >
+              <VideoView
+                player={player}
+                style={StyleSheet.absoluteFill} // VideoView fills the scaled Animated.View
+                nativeControls={false}
+                allowsPictureInPicture={true}
+                allowsVideoFrameAnalysis={false}
+                startsPictureInPictureAutomatically={true}
+                resizeMode="contain" // Base resize mode is contain
+              // pointerEvents="none" // Prevent VideoView from interfering with gestures on parent Animated.View
+              />
+            </Animated.View>
+          </GestureDetector>
+        )}
+
+        {/* Double Tap Seek Indicators */}
+        {!isLiveStream && leftSeekAmount !== 0 && (
+          <Animated.View style={[styles.seekIndicatorLeft, { opacity: leftSeekOpacity }]} pointerEvents="none">
+            <View style={styles.seekIndicatorContent}>
+              <Animated.View style={{ transform: [{ translateX: leftArrowTranslate }] }}>
+                <MaterialIcons name="chevron-left" size={32} color="white" />
+              </Animated.View>
+              <Text style={styles.seekIndicatorText}>- {Math.abs(leftSeekAmount)}</Text>
             </View>
-            {/* Subtitle Toggle/Selection Buttons */}
-            <View style={styles.topRightButtons}>
-              {/* Subtitle Offset Controls - Show only if subtitles are enabled and selected */}
-              {/* {subtitlesEnabled && selectedLanguage && (
+          </Animated.View>
+        )}
+        {!isLiveStream && rightSeekAmount !== 0 && (
+          <Animated.View style={[styles.seekIndicatorRight, { opacity: rightSeekOpacity }]} pointerEvents="none">
+            <View style={styles.seekIndicatorContent}>
+              <Text style={styles.seekIndicatorText}>+ {rightSeekAmount}</Text>
+              <Animated.View style={{ transform: [{ translateX: rightArrowTranslate }] }}>
+                <MaterialIcons name="chevron-right" size={32} color="white" />
+              </Animated.View>
+            </View>
+          </Animated.View>
+        )}
+
+
+        {/* Subtitle Text Display */}
+        {subtitleOverlay}
+        {/* Buffering Indicator */}
+        {isBufferingVideo && !isInitialLoading && (
+          <View style={styles.bufferingIndicatorContainer}>
+            <ActivityIndicator size="large" color="#FFF" />
+          </View>
+        )}
+
+
+        {/* Black Transparent Overlay */}
+        <Animated.View style={[styles.overlayBackground, { opacity: opacityAnim }]} pointerEvents="none" />
+
+        {/* Controls Wrapper (Fades out) */}
+        <Animated.View style={[styles.controlsWrapper, { opacity: opacityAnim, pointerEvents: showControls ? 'box-none' : 'none' }]}>
+          <>
+            {/* Top Controls */}
+            <SafeAreaView style={styles.controlsContainer}>
+              <TouchableOpacity onPress={() => handleGoBack()} style={styles.backButton}>
+                <Ionicons name="arrow-back" size={24} color="white" />
+              </TouchableOpacity>
+              <View style={styles.titleContainer}>
+                <Text style={styles.titleText} numberOfLines={1}>
+                  {title}
+                  {mediaType === 'tv' && episodeTitle ? ` - ${episodeTitle}` : ''}
+                  {mediaType === 'tv' && (
+                    <Text style={styles.seasonEpisodeText}>{` (S${season}:E${episode})`}</Text>
+                  )}
+                </Text>
+              </View>
+              {/* Subtitle Toggle/Selection Buttons */}
+              <View style={styles.topRightButtons}>
+                {/* Subtitle Offset Controls - Show only if subtitles are enabled and selected */}
+                {/* {subtitlesEnabled && selectedLanguage && (
                 <>
                   <TouchableOpacity onPress={() => adjustSubtitleOffset(-SUBTITLE_OFFSET_INCREMENT_MS)} style={styles.controlButton}>
                     <Ionicons name="remove-circle-outline" size={22} color="white" />
@@ -2319,167 +2508,178 @@ const renderEpisodesModal = () => {
                 </>
               )} */}
 
-              {!isLiveStream && (
-                <TouchableOpacity onPress={openChangeSourceModal} style={styles.controlButton} disabled={isInitialLoading || !videoUrl || showSourceSelectionModal}>
-                  {isChangingSource ? (
-                    <ActivityIndicator size="small" color="white" />
-                  ) : (
-                    <Ionicons name="cloudy" size={24} color="white" />
-                  )}
-                </TouchableOpacity>
-              )}
+                {!isLiveStream && (
+                  <TouchableOpacity onPress={openChangeSourceModal} style={styles.controlButton} disabled={isInitialLoading || !videoUrl || showSourceSelectionModal}>
+                    {isChangingSource ? (
+                      <ActivityIndicator size="small" color="white" />
+                    ) : (
+                      <Ionicons name="cloudy" size={24} color="white" />
+                    )}
+                  </TouchableOpacity>
+                )}
 
-              {mediaType === 'tv' && !isLiveStream && (
-                <TouchableOpacity onPress={toggleEpisodesModal} style={styles.controlButton}>
-                  <Ionicons name="albums-outline" size={24} color="white" />
-                </TouchableOpacity>
-              )}
-              {/* <TouchableOpacity onPress={toggleSubtitlesModal} style={styles.controlButton}>
-                <Ionicons
-                  name="logo-closed-captioning"
-                  size={24}
-                  color={'white'} // Dynamic color // subtitlesEnabled && selectedLanguage ? '#E50914' : 'white'
+                {mediaType === 'tv' && !isLiveStream && (
+                  <TouchableOpacity onPress={toggleEpisodesModal} style={styles.controlButton}>
+                    <Ionicons name="albums-outline" size={24} color="white" />
+                  </TouchableOpacity>
+                )}
+                {!isLiveStream && (
+                  <TouchableOpacity onPress={toggleSubtitlesModal} style={styles.controlButton}>
+                    <Ionicons
+                      name="logo-closed-captioning"
+                      size={24}
+                      color={subtitlesEnabled && selectedLanguage ? '#E50914' : 'white'}
+                    />
+                  </TouchableOpacity>
+                )}
+                {Platform.OS === 'ios' && (
+                  <View style={styles.airPlayButtonContainer}>
+                    <VideoAirPlayButton
+                      player={player}
+                      tint="white"
+                      prioritizeVideoDevices={true}
+                      style={styles.airPlayButton}
+                    />
+                  </View>
+                )}
+              </View>
+            </SafeAreaView>
+
+            {/* Brightness Slider */}
+            {hasBrightnessPermission && (
+              <View style={styles.brightnessSliderContainer}>
+                {/* ... brightness slider elements ... */}
+                <Ionicons name="sunny" size={20} color="white" style={styles.brightnessIcon} />
+                <Slider
+                  style={styles.brightnessSlider}
+                  minimumValue={0} maximumValue={1} value={brightnessLevel}
+                  onValueChange={handleBrightnessChange}
+                  minimumTrackTintColor="#FFFFFF" maximumTrackTintColor="rgba(255, 255, 255, 0.3)"
+                  thumbTintColor="transparent"
+                  tapToSeek
                 />
-              </TouchableOpacity> */}
-              {Platform.OS === 'ios' && (
-                <View style={styles.airPlayButtonContainer}>
-                  <VideoAirPlayButton
-                    player={player}
-                    tint="white"
-                    prioritizeVideoDevices={true}
-                    style={styles.airPlayButton}
-                  />
-                </View>
-              )}
+              </View>
+            )}
+
+            {!isLiveStream && (<View style={styles.centerControls}>
+              <TouchableOpacity style={styles.seekButton} onPress={seekBackward}>
+                {/* <Ionicons name="play-back" size={40} color="white" /> */}
+                <MaterialIcons name="replay-10" size={48} color="white" />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.playPauseButton} onPress={togglePlayPause}>
+                <Ionicons name={isPlaying ? "pause" : "play"} size={60} color="white" />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.seekButton} onPress={seekForward}>
+                {/* <Ionicons name="play-forward" size={40} color="white" /> */}
+                <MaterialIcons name="forward-10" size={48} color="white" />
+              </TouchableOpacity>
             </View>
-          </SafeAreaView>
+            )}
 
-          {/* Brightness Slider */}
-          {hasBrightnessPermission && (
-            <View style={styles.brightnessSliderContainer}>
-              {/* ... brightness slider elements ... */}
-              <Ionicons name="sunny" size={20} color="white" style={styles.brightnessIcon} />
-              <Slider
-                style={styles.brightnessSlider}
-                minimumValue={0} maximumValue={1} value={brightnessLevel}
-                onValueChange={handleBrightnessChange}
-                minimumTrackTintColor="#FFFFFF" maximumTrackTintColor="rgba(255, 255, 255, 0.3)"
-                thumbTintColor="transparent"
-                tapToSeek
-              />
+            {isLiveStream && (<View style={styles.centerControls}>
+              <TouchableOpacity style={styles.playPauseButton} onPress={toggleMute}>
+                <Ionicons name={isMuted ? "volume-mute" : "volume-high"} size={60} color="white" />
+              </TouchableOpacity>
             </View>
-          )}
-
-          <View style={styles.centerControls}>
-            <TouchableOpacity style={styles.seekButton} onPress={seekBackward}>
-              <Ionicons name="play-back" size={40} color="white" />
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.playPauseButton} onPress={togglePlayPause}>
-              <Ionicons name={isPlaying ? "pause" : "play"} size={60} color="white" />
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.seekButton} onPress={seekForward}>
-              <Ionicons name="play-forward" size={40} color="white" />
-            </TouchableOpacity>
-          </View>
+            )}
 
 
-          {/* Bottom Controls */}
-          <SafeAreaView style={styles.bottomControls}>
-            {(() => {
-              if (isLiveStream) {
-                const displayPosition = isSeeking && seekPreviewPosition !== null ? seekPreviewPosition : position;
-                const progressPercent = (displayPosition / Math.max(duration, 1)) * 100;
-                return (
-                  <>
-                    <View style={styles.timeText} />
-                    <View style={styles.progressBar} ref={progressBarRef}>
-                      <View style={[styles.progressFill, { width: `${progressPercent}%` }]}/>
-                      <View style={[styles.progressThumb, { left: `${progressPercent}%` }]}/>
-                      <View style={styles.progressTouchArea} {...progressPanResponder.panHandlers}/>
-                    </View>
-                    <View style={styles.liveIndicatorContainer}>
-                      <View style={[styles.liveCircle, { backgroundColor: isAtLiveEdge ? '#FF0000' : '#888888' }]} />
-                      <Text style={styles.liveText}>LIVE</Text>
-                    </View>
-                  </>
-                );
-              } else {
-                const displayPosition = isSeeking && seekPreviewPosition !== null ? seekPreviewPosition : position;
-                const progressPercent = (displayPosition / Math.max(duration, 1)) * 100;
-                return (
-                  <>
-                    <Text style={styles.timeText}>{formatTime(displayPosition)}</Text>
-                    <View style={styles.progressBar} ref={progressBarRef}>
-                      <View style={[styles.progressFill, { width: `${progressPercent}%` }]}/>
-                      <View style={[styles.progressThumb, { left: `${progressPercent}%` }]}/>
-                      <View style={styles.progressTouchArea} {...progressPanResponder.panHandlers}/>
-                    </View>
-                    <Text style={styles.timeText}>{formatTime(duration)}</Text>
-                  </>
-                );
-              }
-            })()}
-          </SafeAreaView>
-        </>
-      </Animated.View>
+            {/* Bottom Controls */}
+            <SafeAreaView style={styles.bottomControls}>
+              {(() => {
+                if (isLiveStream) {
+                  const displayPosition = isSeeking && seekPreviewPosition !== null ? seekPreviewPosition : position;
+                  const progressPercent = Math.min((displayPosition / Math.max(duration, 1)) * 100, 100);
+                  return (
+                    <>
+                      <View style={styles.timeText} />
+                      <View style={styles.progressBar} ref={progressBarRef}>
+                        <View style={[styles.progressFill, { width: `${progressPercent}%` }]} />
+                        <View style={[styles.progressThumb, { left: `${progressPercent}%` }]} />
+                        <View style={styles.progressTouchArea} {...progressPanResponder.panHandlers} />
+                      </View>
+                      <View style={styles.liveIndicatorContainer}>
+                        <View style={[styles.liveCircle, { backgroundColor: isAtLiveEdge ? '#FF0000' : '#888888' }]} />
+                        <Text style={styles.liveText}>LIVE</Text>
+                      </View>
+                    </>
+                  );
+                } else {
+                  const displayPosition = isSeeking && seekPreviewPosition !== null ? seekPreviewPosition : position;
+                  const progressPercent = (displayPosition / Math.max(duration, 1)) * 100;
+                  return (
+                    <>
+                      <Text style={styles.timeText}>{formatTime(displayPosition)}</Text>
+                      <View style={styles.progressBar} ref={progressBarRef}>
+                        <View style={[styles.progressFill, { width: `${progressPercent}%` }]} />
+                        <View style={[styles.progressThumb, { left: `${progressPercent}%` }]} />
+                        <View style={styles.progressTouchArea} {...progressPanResponder.panHandlers} />
+                      </View>
+                      <Text style={styles.timeText}>{formatTime(duration)}</Text>
+                    </>
+                  );
+                }
+              })()}
+            </SafeAreaView>
+          </>
+        </Animated.View>
 
-      {/* Render Next Episode Button OUTSIDE the fading wrapper */}
-      {renderNextEpisodeButton()}
+        {/* Render Next Episode Button OUTSIDE the fading wrapper */}
+        {renderNextEpisodeButton()}
 
-      {/* Subtitle Selection Modal - Removed */}
-      {/* {renderSubtitleSelectionModal()} */}
-    
-      {/* Episodes Viewer Modal */}
-      {mediaType === 'tv' && renderEpisodesModal()}
+        {/* Subtitle Selection Modal - Removed */}
+        {/* {renderSubtitleSelectionModal()} */}
 
-      {/* Buffering Alert Modal */}
-      {renderBufferingAlertModal()}
+        {/* Episodes Viewer Modal */}
+        {mediaType === 'tv' && renderEpisodesModal()}
 
-      {/* Source Selection Modal */}
-      <SourceSelectionModal
-        visible={showSourceSelectionModal}
-        onClose={() => {
-          setShowSourceSelectionModal(false);
-          if (isChangingSource) { // If an attempt was active and modal closed manually
-            // Optionally cancel the ongoing WebView attempt here if possible, or just reset state
-            setIsChangingSource(false);
-            setManualWebViewVisible(false);
-            setCaptchaUrl(null);
-            setCurrentWebViewConfig(null);
-          }
-        }}
-        sources={availableSourcesList}
-        onSelectSource={handleSelectSourceFromModal}
-        currentAttemptStatus={sourceAttemptStatus}
-        currentPlayingSourceName={currentPlayingSourceName}
-      />
+        {/* Buffering Alert Modal */}
+        {renderBufferingAlertModal()}
 
-      {/* Subtitles Selection Modal (New) */}
-      {/* <SubtitlesModal
-        visible={showSubtitlesModal}
-        onClose={() => {
-          setShowSubtitlesModal(false);
-          // Ensure orientation is re-locked if necessary, though toggleSubtitlesModal handles this
-          ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE)
-            .catch(e => console.error("Failed to re-lock to LANDSCAPE on SubtitlesModal direct close:", e));
-        }}
-        availableLanguages={Object.values(availableLanguages || {}).map(langInfo => ({
-          code: langInfo.language,
-          name: "" // getLanguageName(langInfo.language) // Use utility for consistent naming
-        }))}
-        selectedLanguage={selectedLanguage} // Pass the actual selected language code
-        onSelectLanguage={(langCode) => {
-          // selectSubtitle(langCode);
-          setShowSubtitlesModal(false); // Close modal after selection is initiated
-        }}
-        loading={loadingSubtitles}
-      /> */}
+        {/* Source Selection Modal */}
+        <SourceSelectionModal
+          visible={showSourceSelectionModal}
+          onClose={() => {
+            setShowSourceSelectionModal(false);
+            if (isChangingSource) { // If an attempt was active and modal closed manually
+              // Optionally cancel the ongoing WebView attempt here if possible, or just reset state
+              setIsChangingSource(false);
+              setManualWebViewVisible(false);
+              setCaptchaUrl(null);
+              setCurrentWebViewConfig(null);
+            }
+          }}
+          sources={availableSourcesList}
+          onSelectSource={handleSelectSourceFromModal}
+          currentAttemptStatus={sourceAttemptStatus}
+          currentPlayingSourceName={currentPlayingSourceName}
+        />
+
+        {/* Subtitles Selection Modal */}
+        <SubtitlesModal
+          visible={showSubtitlesModal}
+          onClose={() => {
+            setShowSubtitlesModal(false);
+            ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE)
+              .catch(e => console.error("Failed to re-lock to LANDSCAPE on SubtitlesModal direct close:", e));
+          }}
+          availableLanguages={Object.values(availableLanguages || {}).map(langInfo => ({
+            code: langInfo.language,
+            name: getLanguageName(langInfo.language)
+          }))}
+          selectedLanguage={selectedLanguage}
+          onSelectLanguage={(langCode) => {
+            selectSubtitle(langCode);
+            setShowSubtitlesModal(false);
+          }}
+          loading={loadingSubtitles}
+        />
       </View>
-        </GestureHandlerRootView>
-      );
-    };
-    
-    const styles = StyleSheet.create({
+    </GestureHandlerRootView>
+  );
+};
+
+const styles = StyleSheet.create({
   // ... (keep all existing styles) ...
   gestureHandlerRoot: { flex: 1 },
   container: { flex: 1, backgroundColor: '#000' },
@@ -2501,6 +2701,43 @@ const renderEpisodesModal = () => {
   loadingText: { color: '#fff', marginTop: 10 },
   loadingSubText: { color: '#aaa', fontSize: 12, marginTop: 5 },
   bufferingIndicatorContainer: { position: 'absolute', top: '50%', left: '50%', transform: [{ translateX: -18 }, { translateY: -18 }], zIndex: 4 },
+  seekIndicatorLeft: {
+    position: 'absolute',
+    left: 60,
+    top: '50%',
+    transform: [{ translateY: -25 }],
+    backgroundColor: 'rgba(255, 255, 255, 0)',
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 6,
+  },
+  seekIndicatorRight: {
+    position: 'absolute',
+    right: 60,
+    top: '50%',
+    transform: [{ translateY: -25 }],
+    backgroundColor: 'rgba(255, 255, 255, 0)',
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 6,
+  },
+  seekIndicatorContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  seekIndicatorText: {
+    color: '#fff',
+    fontSize: 24,
+    fontWeight: 'bold',
+    marginHorizontal: 8,
+  },
   errorContainer: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center', backgroundColor: '#000', zIndex: 10, padding: 20 },
   errorText: { color: '#fff', marginBottom: 10, fontSize: 16, fontWeight: 'bold' },
   errorDetail: { color: '#888', marginBottom: 20, textAlign: 'center', lineHeight: 18, width: "60%" },
@@ -2533,7 +2770,7 @@ const renderEpisodesModal = () => {
   playPauseButton: { borderRadius: 50, padding: 12, marginHorizontal: 30 },
   seekButton: { borderRadius: 40, padding: 8 },
   bottomControls: { position: 'absolute', bottom: 0, left: 0, right: 0, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 10 },
-  progressBar: { flex: 1, height: 4, backgroundColor: 'rgba(255, 255, 255, 0.3)', marginHorizontal: 15, borderRadius: 2, overflow: 'visible' },
+  progressBar: { flex: 1, height: 4, backgroundColor: 'rgba(255, 255, 255, 0.3)', marginHorizontal: 15, borderRadius: 2, overflow: 'hidden' },
   progressFill: { height: '100%', backgroundColor: '#E50914', borderRadius: 2 },
   progressThumb: { position: 'absolute', top: -4, width: 12, height: 12, borderRadius: 6, backgroundColor: '#E50914', transform: [{ translateX: -6 }], zIndex: 3 },
   progressTouchArea: { position: 'absolute', height: 20, width: '100%', top: -8, backgroundColor: 'transparent', zIndex: 4 },
@@ -2541,7 +2778,7 @@ const renderEpisodesModal = () => {
   liveIndicatorContainer: { flexDirection: 'row', alignItems: 'center', minWidth: 60, justifyContent: 'center' },
   liveCircle: { width: 10, height: 10, borderRadius: 5, marginRight: 6 },
   liveText: { color: '#fff', fontSize: 14, fontWeight: 'bold', letterSpacing: 1 },
-  
+
   // --- New Styles for Next Episode Button ---
   nextEpisodeContainer: {
     position: 'absolute',

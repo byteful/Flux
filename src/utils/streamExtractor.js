@@ -1,22 +1,10 @@
 import { getActiveStreamSources, getStreamingUrl as getApiStreamingUrl } from '../api/vidsrcApi';
 
 const getInjectedJavaScript = (sourceName, jsTimeout) => `
-    function waitForElement(selector) {
-        return new Promise((resolve) => {
-            const interval = setInterval(() => {
-                if (streamFoundAndPosted) { clearInterval(interval); return; } // Stop if stream already found by this instance
-                const element = document.querySelector(selector);
-                if (element) {
-                    clearInterval(interval);
-                    resolve(element);
-                }
-            }, 100);
-        });
-    }
-
     (function() {
       const TIMEOUT_MS = ${jsTimeout};
       const CURRENT_SOURCE_NAME = "${sourceName}";
+      
       // Store original fetch and XMLHttpRequest to monitor network requests
       const originalFetch = window.fetch;
       const originalXHR = window.XMLHttpRequest;
@@ -25,21 +13,44 @@ const getInjectedJavaScript = (sourceName, jsTimeout) => `
       let streamFoundAndPosted = false; // Flag to stop further processing for THIS attempt
       let domScanInterval = null; // To store the interval ID
 
+      // Helper function to wait for elements
+      function waitForElement(selector) {
+        return new Promise((resolve) => {
+          const interval = setInterval(() => {
+            if (streamFoundAndPosted) { 
+              clearInterval(interval); 
+              return; 
+            }
+            const element = document.querySelector(selector);
+            if (element) {
+              clearInterval(interval);
+              resolve(element);
+            }
+          }, 100);
+        });
+      }
+
       // Helper to post messages, ensuring source name is included
       function postToReactNative(type, message, payload) {
         const fullPayload = { type, message, source: CURRENT_SOURCE_NAME, ...payload };
         if (type === 'debug') {
-             window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'debug', message: '[WebViewJS - ' + CURRENT_SOURCE_NAME + '] ' + message, payload: payload ? payload.payload : undefined }));
+          window.ReactNativeWebView.postMessage(JSON.stringify({ 
+            type: 'debug', 
+            message: '[WebViewJS - ' + CURRENT_SOURCE_NAME + '] ' + message, 
+            payload: payload ? payload.payload : undefined 
+          }));
         } else {
-             window.ReactNativeWebView.postMessage(JSON.stringify(fullPayload));
+          window.ReactNativeWebView.postMessage(JSON.stringify(fullPayload));
         }
       }
 
+      // Wait for iframe and redirect
       waitForElement('#player > iframe').then(iframe => {
         if (streamFoundAndPosted) return;
         window.location.href = iframe.src;
       }).catch(e => postToReactNative('debug', 'Error waiting for #player > iframe', { payload: e.toString() }));
 
+      // Video element handling
       let videoElementInteracted = false;
 
       waitForElement('video').then(videoElement => {
@@ -58,44 +69,51 @@ const getInjectedJavaScript = (sourceName, jsTimeout) => `
         }
 
         setTimeout(() => {
-            if (streamFoundAndPosted) return;
-            const currentSrc = videoElement.src;
-            postToReactNative('debug', 'video element src: ' + currentSrc, { payload: currentSrc });
-            if (currentSrc && (currentSrc.includes('.m3u8') || currentSrc.includes('.mp4') || CURRENT_SOURCE_NAME.includes('xprime'))) {
-              if (!m3u8UrlsFound.some(item => item.url === currentSrc)) {
-                  const domReferer = (window.location && window.location.href && window.location.href !== 'about:blank') ? window.location.href : null;
-                  m3u8UrlsFound.push({ url: currentSrc, referer: domReferer });
-                  if (!mainM3u8Found) {
-                      mainM3u8Found = true;
-                      postToReactNative('stream', 'Stream found via video.src', { url: currentSrc, referer: domReferer });
-                      streamFoundAndPosted = true;
-                      if (domScanInterval) clearInterval(domScanInterval);
-                  } else {
-                       postToReactNative('stream_candidate', 'Candidate via video.src', { url: currentSrc, referer: domReferer });
-                  }
+          if (streamFoundAndPosted) return;
+          const currentSrc = videoElement.src;
+          postToReactNative('debug', 'video element src: ' + currentSrc, { payload: currentSrc });
+          if (currentSrc && (currentSrc.includes('.m3u8') || currentSrc.includes('.mp4') || CURRENT_SOURCE_NAME.includes('xprime'))) {
+            if (!m3u8UrlsFound.some(item => item.url === currentSrc)) {
+              const domReferer = (window.location && window.location.href && window.location.href !== 'about:blank') ? window.location.href : null;
+              m3u8UrlsFound.push({ url: currentSrc, referer: domReferer });
+              if (!mainM3u8Found) {
+                mainM3u8Found = true;
+                postToReactNative('stream', 'Stream found via video.src', { url: currentSrc, referer: domReferer });
+                streamFoundAndPosted = true;
+                if (domScanInterval) clearInterval(domScanInterval);
+              } else {
+                postToReactNative('stream_candidate', 'Candidate via video.src', { url: currentSrc, referer: domReferer });
               }
             }
+          }
         }, 1000);
       }).catch(e => postToReactNative('debug', 'Error waiting for video element', { payload: e.toString() }));
 
+      // Wait for play button
       waitForElement("#fixed-container > div.flex.flex-col.items-center.gap-y-3.title-year > button").then(elem => {
         if (streamFoundAndPosted) return;
         setTimeout(() => { if (!streamFoundAndPosted) elem.click(); }, 1000);
       }).catch(e => postToReactNative('debug', 'Error waiting for play button', { payload: e.toString() }));
 
+      // Override fetch
       window.fetch = async function(...args) {
         if (streamFoundAndPosted) return originalFetch.apply(this, args);
         const urlStr = args[0].toString();
         let actualReferer = null;
         try {
-            const request = new Request(args[0], args[1]);
-            if (request.referrer && request.referrer !== 'about:client' && request.referrer !== '') { actualReferer = request.referrer; }
-            else if (request.referrer === 'about:client') { actualReferer = window.location.href; }
+          const request = new Request(args[0], args[1]);
+          if (request.referrer && request.referrer !== 'about:client' && request.referrer !== '') { 
+            actualReferer = request.referrer; 
+          } else if (request.referrer === 'about:client') { 
+            actualReferer = window.location.href; 
+          }
         } catch (e) {
-            if (args[1] && args[1].headers) {
-                const headers = new Headers(args[1].headers);
-                if (headers.has('Referer')) { actualReferer = headers.get('Referer'); }
+          if (args[1] && args[1].headers) {
+            const headers = new Headers(args[1].headers);
+            if (headers.has('Referer')) { 
+              actualReferer = headers.get('Referer'); 
             }
+          }
         }
         postToReactNative('debug', 'Fetch Intercept: URL=' + urlStr, { payload: { referer: actualReferer }});
 
@@ -113,6 +131,7 @@ const getInjectedJavaScript = (sourceName, jsTimeout) => `
         return originalFetch.apply(this, args);
       };
 
+      // Override XMLHttpRequest
       window.XMLHttpRequest = function() {
         const xhr = new originalXHR();
         if (streamFoundAndPosted) return xhr;
@@ -126,36 +145,45 @@ const getInjectedJavaScript = (sourceName, jsTimeout) => `
           if (streamFoundAndPosted) return _originalOpen.apply(this, arguments);
           const urlStr = url.toString();
           _capturedRefererHeader = null;
-          if (urlStr.includes('.m3u8')) { _urlForM3U8 = urlStr; } else { _urlForM3U8 = null; }
+          if (urlStr.includes('.m3u8')) { 
+            _urlForM3U8 = urlStr; 
+          } else { 
+            _urlForM3U8 = null; 
+          }
           return _originalOpen.apply(this, arguments);
         };
+        
         xhr.setRequestHeader = function(header, value) {
-            if (header.toLowerCase() === 'referer') { _capturedRefererHeader = value; }
-            return _originalSetRequestHeader.apply(this, arguments);
+          if (header.toLowerCase() === 'referer') { 
+            _capturedRefererHeader = value; 
+          }
+          return _originalSetRequestHeader.apply(this, arguments);
         };
+        
         xhr.send = function() {
-            if (streamFoundAndPosted) return _originalSend.apply(this, arguments);
-            if (_urlForM3U8) {
-                let refererForXhr = _capturedRefererHeader;
-                if (!refererForXhr && window.location && window.location.href && window.location.href !== 'about:blank') {
-                    refererForXhr = window.location.href;
-                }
-                postToReactNative('debug', 'XHR Intercept: URL=' + _urlForM3U8, { payload: { referer: refererForXhr }});
-                postToReactNative('stream_candidate', 'Candidate via XHR', { url: _urlForM3U8, referer: refererForXhr });
-                if (!mainM3u8Found && (_urlForM3U8.includes('master') || _urlForM3U8.includes('playlist'))) {
-                    mainM3u8Found = true;
-                    postToReactNative('stream', 'Stream found via XHR', { url: _urlForM3U8, referer: refererForXhr });
-                    streamFoundAndPosted = true;
-                    if (domScanInterval) clearInterval(domScanInterval);
-                } else if (!m3u8UrlsFound.some(item => item.url === _urlForM3U8)) {
-                    m3u8UrlsFound.push({ url: _urlForM3U8, referer: refererForXhr });
-                }
+          if (streamFoundAndPosted) return _originalSend.apply(this, arguments);
+          if (_urlForM3U8) {
+            let refererForXhr = _capturedRefererHeader;
+            if (!refererForXhr && window.location && window.location.href && window.location.href !== 'about:blank') {
+              refererForXhr = window.location.href;
             }
-            return _originalSend.apply(this, arguments);
+            postToReactNative('debug', 'XHR Intercept: URL=' + _urlForM3U8, { payload: { referer: refererForXhr }});
+            postToReactNative('stream_candidate', 'Candidate via XHR', { url: _urlForM3U8, referer: refererForXhr });
+            if (!mainM3u8Found && (_urlForM3U8.includes('master') || _urlForM3U8.includes('playlist'))) {
+              mainM3u8Found = true;
+              postToReactNative('stream', 'Stream found via XHR', { url: _urlForM3U8, referer: refererForXhr });
+              streamFoundAndPosted = true;
+              if (domScanInterval) clearInterval(domScanInterval);
+            } else if (!m3u8UrlsFound.some(item => item.url === _urlForM3U8)) {
+              m3u8UrlsFound.push({ url: _urlForM3U8, referer: refererForXhr });
+            }
+          }
+          return _originalSend.apply(this, arguments);
         };
         return xhr;
       };
       
+      // Check iframes for streams
       function checkIframes() {
         if (streamFoundAndPosted) return;
         try {
@@ -166,30 +194,28 @@ const getInjectedJavaScript = (sourceName, jsTimeout) => `
               if (iframeWindow && iframeWindow.document && !iframeWindow.SKIP_FLUX_INJECTION) {
                 iframeWindow.SKIP_FLUX_INJECTION = true; // Prevent re-injection
                 const scriptEl = iframeWindow.document.createElement('script');
-                scriptEl.textContent = \`
-                  (function() {
-                    const IFRAME_SOURCE_NAME = "${sourceName}";
-                    function postToParent(type, message, payload) {
-                        window.parent.postMessage({ type, message, source: IFRAME_SOURCE_NAME, ...payload }, '*');
-                    }
-                    const oFetch = window.fetch;
-                    window.fetch = async function(...args) {
-                      const url = args[0].toString();
-                      if (url.includes('.m3u8')) { postToParent('stream', 'Stream from iframe fetch', { url }); }
-                      return oFetch.apply(this, args);
-                    };
-                    const oXHR = window.XMLHttpRequest;
-                    window.XMLHttpRequest = function() {
-                      const xhr = new oXHR();
-                      const oOpen = xhr.open;
-                      xhr.open = function(m, u) {
-                        if (u.toString().includes('.m3u8')) { postToParent('stream', 'Stream from iframe XHR', { url: u.toString() }); }
-                        return oOpen.apply(this, arguments);
-                      };
-                      return xhr;
-                    };
-                  })();
-                \`;
+                scriptEl.textContent = '(function() {' +
+                  'const IFRAME_SOURCE_NAME = "' + CURRENT_SOURCE_NAME + '";' +
+                  'function postToParent(type, message, payload) {' +
+                  '  window.parent.postMessage({ type: type, message: message, source: IFRAME_SOURCE_NAME, ...payload }, "*");' +
+                  '}' +
+                  'const oFetch = window.fetch;' +
+                  'window.fetch = async function(...args) {' +
+                  '  const url = args[0].toString();' +
+                  '  if (url.includes(".m3u8")) { postToParent("stream", "Stream from iframe fetch", { url: url }); }' +
+                  '  return oFetch.apply(this, args);' +
+                  '};' +
+                  'const oXHR = window.XMLHttpRequest;' +
+                  'window.XMLHttpRequest = function() {' +
+                  '  const xhr = new oXHR();' +
+                  '  const oOpen = xhr.open;' +
+                  '  xhr.open = function(m, u) {' +
+                  '    if (u.toString().includes(".m3u8")) { postToParent("stream", "Stream from iframe XHR", { url: u.toString() }); }' +
+                  '    return oOpen.apply(this, arguments);' +
+                  '  };' +
+                  '  return xhr;' +
+                  '};' +
+                  '})();';
                 iframeWindow.document.head.appendChild(scriptEl);
               }
             } catch (e) { /* Cross-origin issues */ }
@@ -197,6 +223,7 @@ const getInjectedJavaScript = (sourceName, jsTimeout) => `
         } catch (e) {}
       }
       
+      // Listen for iframe messages
       window.addEventListener('message', function(event) {
         if (streamFoundAndPosted) return;
         if (event.data && event.data.type === 'stream' && event.data.url && event.data.source === CURRENT_SOURCE_NAME) {
@@ -210,8 +237,12 @@ const getInjectedJavaScript = (sourceName, jsTimeout) => `
         }
       });
 
+      // DOM scan interval
       domScanInterval = setInterval(function() {
-        if (streamFoundAndPosted) { clearInterval(domScanInterval); return; }
+        if (streamFoundAndPosted) { 
+          clearInterval(domScanInterval); 
+          return; 
+        }
         document.querySelectorAll('source, video').forEach(el => {
           if (streamFoundAndPosted) return;
           if (el.src && (el.src.includes('.m3u8') || el.src.includes('moviebox.ng') || el.src.includes(".mp4")) && !m3u8UrlsFound.some(item => item.url === el.src)) {
@@ -230,6 +261,7 @@ const getInjectedJavaScript = (sourceName, jsTimeout) => `
         }
       }, 1000);
       
+      // Timeout handler
       setTimeout(function() {
         if (streamFoundAndPosted) return;
         if (domScanInterval) clearInterval(domScanInterval);
@@ -245,6 +277,7 @@ const getInjectedJavaScript = (sourceName, jsTimeout) => `
       
       true; // Indicate script execution
     })();
+    true;
 `;
 
 const _extractStream = (
@@ -257,7 +290,8 @@ const _extractStream = (
   onSourceError,
   onAllSourcesFailed,
   onManualInterventionRequired,
-  provideWebViewConfigForAttempt
+  provideWebViewConfigForAttempt,
+  directUrl = null
 ) => {
   let currentSourceIndex = 0;
   let attemptKey = 0;
@@ -274,7 +308,12 @@ const _extractStream = (
     attemptKey++;
     currentSourceIndex++;
 
-    const embedUrl = getApiStreamingUrl(sourceInfo.baseUrl, tmdbId, type, season, episode);
+    let embedUrl;
+    if (directUrl) {
+      embedUrl = directUrl;
+    } else {
+      embedUrl = getApiStreamingUrl(sourceInfo.baseUrl, tmdbId, type, season, episode);
+    }
 
     if (!embedUrl) {
       console.error(`[StreamExtractor] Could not generate embed URL for source: ${sourceInfo.name}`);
@@ -287,6 +326,7 @@ const _extractStream = (
 
     const sourceOrigin = new URL(embedUrl).origin;
     const jsTimeout = (sourceInfo.timeoutInSeconds || 10) * 1000;
+    
     const injectedJavaScript = getInjectedJavaScript(sourceInfo.name, jsTimeout);
 
     let attemptConcluded = false;
@@ -294,8 +334,15 @@ const _extractStream = (
     const webViewConfig = {
       source: {
         uri: embedUrl,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.5',
+          'Referer': 'https://v2.streameast.ga/',
+        }
       },
-      injectedJavaScript: injectedJavaScript,
+      injectedJavaScript,
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       onMessage: (event) => {
         if (attemptConcluded) return;
         try {
@@ -454,7 +501,7 @@ export const extractStreamFromSpecificSource = (
     episode,
     onStreamFound,
     onSourceError,
-    (error) => { // For a single source, onAllSourcesFailed is equivalent to onSourceError
+    (error) => {
       if (onSourceError) {
         onSourceError(error, sourceInfo.name);
       }
@@ -464,7 +511,53 @@ export const extractStreamFromSpecificSource = (
   );
 };
 
+/**
+ * Extract m3u8 stream URL from a live stream URL (e.g., StreamEast).
+ * 
+ * @param {string} directUrl - The direct URL to the live stream page
+ * @param {string} sourceName - Name of the source (e.g., 'StreamEast')
+ * @param {number} timeoutInSeconds - Timeout for stream extraction in seconds
+ * @param {Function} onStreamFound - Callback function when stream URL is found
+ * @param {Function} onSourceError - Callback function for errors
+ * @param {Function} onManualInterventionRequired - Callback if manual interaction is needed
+ * @param {Function} provideWebViewConfigForAttempt - Callback to provide the WebView config for rendering
+ */
+export const extractLiveStream = (
+  directUrl,
+  sourceName,
+  timeoutInSeconds,
+  onStreamFound,
+  onSourceError,
+  onManualInterventionRequired,
+  provideWebViewConfigForAttempt
+) => {
+  const sourceInfo = {
+    name: sourceName,
+    baseUrl: null,
+    timeoutInSeconds: timeoutInSeconds || 15
+  };
+
+  _extractStream(
+    [sourceInfo],
+    null,
+    null,
+    null,
+    null,
+    onStreamFound,
+    onSourceError,
+    (error) => {
+      if (onSourceError) {
+        onSourceError(error, sourceName);
+      }
+    },
+    onManualInterventionRequired,
+    provideWebViewConfigForAttempt,
+    directUrl
+  );
+};
+
 export default {
   extractM3U8Stream,
-  extractStreamFromSpecificSource
+  extractStreamFromSpecificSource,
+  extractLiveStream
 };

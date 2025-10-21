@@ -395,7 +395,7 @@ const HomeScreen = () => {
           )}
 
           <SportRow
-            title="Live Sports"
+            title="Live Sports (beta)"
             data={sportCategories}
             onSportPress={handleSportPress}
           />

@@ -1,7 +1,6 @@
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 
-
 // TODO: Populate this map with actual sport logo URLs
 // This maps sport tokens (e.g., 'NFL', 'NBA') to their respective logo URLs
 export const SPORT_LOGO_MAP = {
@@ -174,27 +173,163 @@ export const fetchLiveStreams = async () => {
 };
 
 /**
- * Extracts the m3u8 stream URL from a specific StreamEast event page
+ * Extracts the m3u8 stream URL from a StreamEast event page by following the decryption chain
  * @param {string} streameastUrl - The full URL to the StreamEast event page
- * @returns {Promise<{url: string, referer: string}|null>} Stream URL and referer, or null if extraction fails
+ * @returns {Promise<{url: string, referer: string}>} Stream URL and referer
  */
-export const extractLiveStreamM3U8 = async (streameastUrl) => {
+export const extractM3U8Direct = async (streameastUrl) => {
   try {
-    // console.log('[StreamEast] Extracting m3u8 from:', streameastUrl);
+    // Step 1: Get the initial page source
+    const initialResponse = await axios.get(streameastUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      },
+      timeout: 10000,
+    });
+    
+    const html = initialResponse.data;
+    
+    // Step 2: Extract the .php URL from src attribute
+    const phpUrlMatch = html.match(/src=["']([^"']*\.php[^"']*)["']/);
+    if (!phpUrlMatch) {
+      throw new Error('Could not find .php embed URL');
+    }
+    
+    let phpUrl = phpUrlMatch[1];
+    // Make absolute URL if relative
+    if (phpUrl.startsWith('//')) {
+      phpUrl = 'https:' + phpUrl;
+    } else if (phpUrl.startsWith('/')) {
+      const baseUrl = new URL(streameastUrl);
+      phpUrl = baseUrl.origin + phpUrl;
+    }
+
+    // Step 3: Get the PHP page to find the iframe
+    const phpResponse = await axios.get(phpUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Referer': streameastUrl,
+      },
+      timeout: 10000,
+    });
+    
+    const phpHtml = phpResponse.data;
+
+    // Step 4: Extract the streamcenter.pro iframe URL
+    const iframeMatch = phpHtml.match(/streamcenter\.pro\/embed\/hls\.php\?stream=[^"'\s]+/);
+    if (!iframeMatch) {
+      throw new Error('Could not find streamcenter.pro iframe URL');
+    }
+    
+    const iframeUrl = "https://" + iframeMatch[0];
+
+    // Step 5: Fetch the iframe page with the PHP URL as referer
+    const iframeResponse = await axios.get(iframeUrl, {
+      headers: {
+        'Referer': phpUrl,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      },
+      timeout: 10000,
+    });
+    
+    const iframeHtml = iframeResponse.data;
+
+    const inputMatch = iframeHtml.match(/input:\s*["']([^"']+)["']/);
+    if (!inputMatch) {
+      throw new Error('Could not find encrypted input value');
+    }
+    
+    const encryptedInput = inputMatch[1];
+
+    // Step 7: Call decrypt.php to get the actual m3u8 URL
+    const iframeBaseUrl = new URL(iframeUrl).origin + '/embed';
+    const decryptUrl = `${iframeBaseUrl}/decrypt.php`;
+    
+    const decryptResponse = await axios.post(
+      decryptUrl,
+      new URLSearchParams({
+        input: encryptedInput
+      }).toString(),
+      {
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Referer': iframeUrl,
+          'Origin': new URL(iframeUrl).origin,
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        },
+        timeout: 10000,
+      }
+    );
+
+    const decryptedUrl = decryptResponse.data.trim();
+    
+    if (!decryptedUrl || decryptedUrl === '') {
+      throw new Error('Decryption returned empty response');
+    }
     
     return {
-      url: "",
-      referer: ""
+      url: decryptedUrl,
+      referer: iframeUrl,
     };
   } catch (error) {
-    console.error('[StreamEast] Error extracting m3u8 from:', streameastUrl, error.message);
-    return null;
+    console.error('[StreamEast] Error extracting m3u8:', error.message);
+    throw error;
+  }
+};
+
+/**
+ * Extracts the m3u8 stream URL from a specific StreamEast event page
+ * This function supports both direct extraction and WebView-based fallback
+ * @param {string} streameastUrl - The full URL to the StreamEast event page
+ * @param {Function} onStreamFound - Callback when stream is found (streamUrl, referer, sourceName)
+ * @param {Function} onSourceError - Callback when an error occurs (error, sourceName)
+ * @param {Function} onManualInterventionRequired - Callback when manual intervention is needed (url, sourceName)
+ * @param {Function} provideWebViewConfigForAttempt - Callback to provide WebView config for rendering
+ */
+export const extractLiveStreamM3U8 = async (
+  streameastUrl,
+  onStreamFound,
+  onSourceError,
+  onManualInterventionRequired,
+  provideWebViewConfigForAttempt
+) => {
+  try {
+    // First try direct extraction
+    const result = await extractM3U8Direct(streameastUrl);
+    
+    if (result && result.url) {
+      onStreamFound(result.url, result.referer, 'streameast.ga');
+      return;
+    }
+  } catch (error) {
+    console.warn('[StreamEast] Direct extraction failed, falling back to WebView method:', error.message);
+  }
+  
+  // Fallback to WebView-based extraction if direct method fails
+  try {
+    const { extractLiveStream } = require('../utils/streamExtractor');
+    
+    extractLiveStream(
+      streameastUrl,
+      'streameast.ga',
+      15,
+      onStreamFound,
+      onSourceError,
+      onManualInterventionRequired,
+      provideWebViewConfigForAttempt
+    );
+  } catch (fallbackError) {
+    console.error('[StreamEast] Both extraction methods failed');
+    onSourceError(fallbackError, 'streameast.ga');
   }
 };
 
 export default {
   fetchLiveStreams,
   extractLiveStreamM3U8,
+  extractM3U8Direct,
   determineSportToken,
   getSportDisplayName,
   SPORT_LOGO_MAP,

@@ -320,9 +320,9 @@ export const clearSearchHistory = async () => {
 
 // --- Subtitle Preference Functions ---
 
-export const saveLastSelectedSubtitleLanguage = async (languageCode) => {
+export const saveSubtitleLanguagePreference = async (languageCode) => {
   try {
-    // languageCode can be a string (e.g., 'en') or null (for 'None')
+    // languageCode can be a string (e.g., 'en') or null (for 'None'/disabled)
     if (languageCode === null) {
       await AsyncStorage.setItem(LAST_SUBTITLE_LANG_KEY, 'none'); // Store 'none' as a special string
     } else {
@@ -330,50 +330,29 @@ export const saveLastSelectedSubtitleLanguage = async (languageCode) => {
     }
     return true;
   } catch (error) {
-    console.error('Error saving last selected subtitle language:', error);
+    console.error('Error saving subtitle language preference:', error);
     return false;
   }
 };
 
-export const getLastSelectedSubtitleLanguage = async () => {
+export const getSubtitleLanguagePreference = async () => {
   try {
     const languageCode = await AsyncStorage.getItem(LAST_SUBTITLE_LANG_KEY);
     if (languageCode === 'none') {
-      return null; // Convert 'none' back to null
+      return null; // Convert 'none' back to null (subtitles disabled)
     }
     return languageCode; // Returns the code string or null if not set
   } catch (error) {
-    console.error('Error getting last selected subtitle language:', error);
+    console.error('Error getting subtitle language preference:', error);
     return null; // Default to null on error
   }
 };
 
+// Legacy function names for backward compatibility
+export const saveLastSelectedSubtitleLanguage = saveSubtitleLanguagePreference;
+export const getLastSelectedSubtitleLanguage = getSubtitleLanguagePreference;
+
 // --- End Subtitle Preference Functions ---
-
-// --- Subtitles Enabled State Functions ---
-export const saveSubtitlesEnabledState = async (isEnabled) => {
-  try {
-    await AsyncStorage.setItem(SUBTITLES_ENABLED_KEY, JSON.stringify(isEnabled));
-    return true;
-  } catch (error) {
-    console.error('Error saving subtitles enabled state:', error);
-    return false;
-  }
-};
-
-export const getSubtitlesEnabledState = async () => {
-  try {
-    const storedState = await AsyncStorage.getItem(SUBTITLES_ENABLED_KEY);
-    if (storedState === null) {
-      return false; // Default to false (subtitles off) if never set
-    }
-    return JSON.parse(storedState);
-  } catch (error) {
-    console.error('Error getting subtitles enabled state:', error);
-    return false; // Default to false on error
-  }
-};
-// --- End Subtitles Enabled State Functions ---
 
 export const saveStreamSourceOrder = async (sourceOrder) => {
   // sourceOrder should be an array of objects like: { name: 'vidsrc.cc', timeoutInSeconds: 20 }
@@ -457,10 +436,10 @@ export default {
   getSearchHistory,
   removeSearchQuery,
   clearSearchHistory,
+  saveSubtitleLanguagePreference,
+  getSubtitleLanguagePreference,
   saveLastSelectedSubtitleLanguage,
   getLastSelectedSubtitleLanguage,
-  saveSubtitlesEnabledState,
-  getSubtitlesEnabledState,
   // Stream Source Order
   saveStreamSourceOrder,
   getStreamSourceOrder,
