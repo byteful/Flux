@@ -102,13 +102,14 @@ const DownloadsScreen = () => {
     await downloadManager.retryDownload(downloadId);
   };
 
-  const handlePlay = (item) => {
+  const handlePlay = async (item) => {
     let basePath;
     if (item.filePath.endsWith('.m3u8') || item.filePath.endsWith('.mp4')) {
       basePath = item.filePath;
     } else {
-      basePath = `${item.filePath}video.m3u8`;
+      basePath = `${item.filePath}video.mp4`;
     }
+
     const offlinePath = basePath.startsWith('file://')
       ? basePath
       : `file://${basePath}`;

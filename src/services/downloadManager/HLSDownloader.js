@@ -3,6 +3,7 @@ import { File } from 'expo-file-system';
 import * as LegacyFileSystem from 'expo-file-system/legacy';
 import storageManager from './StorageManager';
 import { ensureDirectoryExists } from '../../utils/downloadStorage';
+import ffmpegConverter from './FFmpegConverter';
 
 class HLSDownloader {
   constructor(entry, onProgress, onComplete, onError) {
@@ -76,25 +77,73 @@ class HLSDownloader {
 
       if (this.isCancelled) return;
 
-      this.reportProgress(95, 'finalizing');
+      this.reportProgress(95, 'converting');
 
-      const localM3u8Path = await this.createLocalPlaylist();
-      const totalSize = await this.calculateTotalSize();
+      const mp4Path = `${this.contentDir}video.mp4`;
 
-      this.reportProgress(100, 'completed');
+      try {
+        const conversionResult = await ffmpegConverter.convertHLSToMP4(
+          this.segmentsDir,
+          mp4Path,
+          (progressData) => {
+            this.reportProgress(95, 'converting');
+          }
+        );
 
-      if (this.onComplete) {
-        this.onComplete({
-          filePath: localM3u8Path,
-          fileSize: totalSize,
-          segmentCount: this.totalSegments,
-        });
+        if (this.isCancelled) return;
+
+        if (conversionResult.success) {
+          await this.cleanupHLSFiles();
+
+          this.reportProgress(100, 'completed');
+
+          if (this.onComplete) {
+            this.onComplete({
+              filePath: conversionResult.filePath,
+              fileSize: conversionResult.fileSize,
+              segmentCount: this.totalSegments,
+            });
+          }
+        } else if (conversionResult.cancelled) {
+          if (conversionResult.cancelledDueToBackground) {
+            if (this.onError) {
+              this.onError(new Error('Conversion paused - app went to background. Please retry when app is active.'));
+            }
+          }
+        }
+      } catch (conversionError) {
+        console.error('[HLSDownloader] MP4 conversion failed:', conversionError);
+
+        const localM3u8Path = await this.createLocalPlaylist();
+        const totalSize = await this.calculateTotalSize();
+
+        this.reportProgress(100, 'completed');
+
+        if (this.onComplete) {
+          this.onComplete({
+            filePath: localM3u8Path,
+            fileSize: totalSize,
+            segmentCount: this.totalSegments,
+          });
+        }
       }
     } catch (error) {
       console.error('HLSDownloader error:', error);
       if (this.onError && !this.isCancelled) {
         this.onError(error);
       }
+    }
+  }
+
+  async cleanupHLSFiles() {
+    try {
+      const segmentsDirClean = this.segmentsDir.replace('file://', '');
+      await LegacyFileSystem.deleteAsync(segmentsDirClean, { idempotent: true });
+
+      const m3u8Path = `${this.contentDir}video.m3u8`.replace('file://', '');
+      await LegacyFileSystem.deleteAsync(m3u8Path, { idempotent: true });
+    } catch (error) {
+      // Ignore cleanup errors
     }
   }
 
@@ -253,8 +302,8 @@ class HLSDownloader {
     for (const segment of this.segments) {
       playlistContent += `#EXTINF:${segment.duration.toFixed(6)},\n`;
       let absoluteSegmentPath = `${this.segmentsDir}${segment.localFilename}`;
-      if (absoluteSegmentPath.startsWith('file://')) {
-        absoluteSegmentPath = absoluteSegmentPath.replace('file://', '');
+      if (!absoluteSegmentPath.startsWith('file://')) {
+        absoluteSegmentPath = `file://${absoluteSegmentPath}`;
       }
       playlistContent += `${absoluteSegmentPath}\n`;
     }

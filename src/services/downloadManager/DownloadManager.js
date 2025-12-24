@@ -3,6 +3,7 @@ import storageManager from './StorageManager';
 import downloadQueue from './DownloadQueue';
 import HLSDownloader from './HLSDownloader';
 import MP4Downloader from './MP4Downloader';
+import ffmpegConverter from './FFmpegConverter';
 import {
   getDownloadSettings,
   initializeDownloadsDirectory,
@@ -33,6 +34,7 @@ class DownloadManager {
       await storageManager.initialize();
       await downloadQueue.initialize();
       await networkMonitor.start();
+      ffmpegConverter.initialize();
 
       this.networkUnsubscribe = networkMonitor.subscribe((state) => {
         this.handleNetworkChange(state);
@@ -392,6 +394,7 @@ class DownloadManager {
       this.networkUnsubscribe();
     }
     networkMonitor.stop();
+    ffmpegConverter.destroy();
     this.activeDownloads.clear();
     this.listeners.clear();
     this.isInitialized = false;

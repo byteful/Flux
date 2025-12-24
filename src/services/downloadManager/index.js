@@ -5,6 +5,7 @@ import storageManager from './StorageManager';
 import HLSDownloader from './HLSDownloader';
 import MP4Downloader from './MP4Downloader';
 import cleanupService from './CleanupService';
+import ffmpegConverter from './FFmpegConverter';
 
 export {
   downloadManager as default,
@@ -14,4 +15,5 @@ export {
   HLSDownloader,
   MP4Downloader,
   cleanupService,
+  ffmpegConverter,
 };

@@ -1022,6 +1022,8 @@ const VideoPlayerScreen = ({ route }) => {
   // ... (keep existing listeners for statusChange, timeUpdate, playingChange, error) ...
   useEventListener(player, 'statusChange', (event) => {
     const status = event?.status ?? event;
+    console.log('[VideoPlayerScreen] statusChange event:', JSON.stringify(event, null, 2));
+    console.log('[VideoPlayerScreen] parsed status:', status);
     if (isUnmounting) return;
 
     const clearBufferingTimer = () => {
@@ -1158,7 +1160,11 @@ const VideoPlayerScreen = ({ route }) => {
 
   useEventListener(player, 'error', (error) => {
     if (isUnmounting) return;
-    console.error('[useEventListener] Video playback error occurred:', error);
+    console.error('[VideoPlayerScreen] Video playback error occurred:', error);
+    console.error('[VideoPlayerScreen] Error details:', JSON.stringify(error, null, 2));
+    console.error('[VideoPlayerScreen] Error message:', error?.message);
+    console.error('[VideoPlayerScreen] Error code:', error?.code);
+    console.error('[VideoPlayerScreen] Current videoUrl:', videoUrl);
     setError({ message: 'Video playback error: ' + (error?.message || 'Unknown error') });
   });
   // --- End Event Listeners ---
@@ -1359,7 +1365,6 @@ const VideoPlayerScreen = ({ route }) => {
           ? offlineFilePath
           : `file://${offlineFilePath}`;
 
-        // Check if the offline file actually exists
         const pathForCheck = normalizedPath.replace('file://', '');
         const fileInfo = await LegacyFileSystem.getInfoAsync(pathForCheck);
 
@@ -1373,17 +1378,20 @@ const VideoPlayerScreen = ({ route }) => {
           setStreamExtractionComplete(true);
 
           const isHLS = normalizedPath.endsWith('.m3u8');
-          player.replaceAsync({
-            uri: normalizedPath,
-            contentType: isHLS ? 'hls' : 'progressive',
-          });
 
-          // Mark as watched for auto-delete tracking
+          try {
+            await player.replaceAsync({
+              uri: normalizedPath,
+              contentType: isHLS ? 'hls' : 'progressive',
+            });
+          } catch (playerErr) {
+            console.error('[VideoPlayerScreen] Offline playback error:', playerErr.message);
+          }
+
           const downloadId = generateDownloadId(mediaType, mediaId, season, episode);
           downloadManager.markAsWatched(downloadId);
           return;
         }
-        // File doesn't exist, fall through to streaming
       }
 
       await checkSavedProgress();
