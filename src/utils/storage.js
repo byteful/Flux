@@ -14,11 +14,13 @@ const SUBTITLES_ENABLED_KEY = 'subtitlesEnabled'; // New key for enabled state
 const STREAM_SOURCE_ORDER_KEY = 'streamSourceOrder';
 const STREAM_SOURCE_SIGNATURE_KEY = 'streamSourceSignature';
 
+export const FLUX_SOURCE_URL = "https://streamprovider.koyeb.app/";
+
 // Define default sources here, so it's accessible by other modules if needed
 // This should match the `name` property of the sources in vidsrcApi.js
 // Also include defaultBaseUrl which will be used by vidsrcApi.js if a source is newly added.
 export const DEFAULT_STREAM_SOURCES = [
-  { name: 'FluxSource', timeoutInSeconds: 15, type: 'direct', defaultBaseUrl: 'https://streamprovider.koyeb.app/' },
+  { name: 'FluxSource', timeoutInSeconds: 15, type: 'direct', defaultBaseUrl: FLUX_SOURCE_URL },
   // { name: 'hexa.su', timeoutInSeconds: 10, type: 'direct', defaultBaseUrl: 'https://hexa.su/watch' },
   { name: 'cineby.gd', timeoutInSeconds: 10, type: 'direct', defaultBaseUrl: 'https://cineby.gd' },
 ];

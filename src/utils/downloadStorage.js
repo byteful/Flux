@@ -61,18 +61,21 @@ export const ensureDirectoryExists = async (dirPath) => {
 
 export const initializeDownloadsDirectory = async () => {
   try {
-    if (!DOWNLOADS_BASE_DIR.exists) {
-      DOWNLOADS_BASE_DIR.create();
+    const baseInfo = await LegacyFileSystem.getInfoAsync(DOWNLOADS_DIR);
+    if (!baseInfo.exists) {
+      await LegacyFileSystem.makeDirectoryAsync(DOWNLOADS_DIR, { intermediates: true });
     }
-    
-    const moviesDir = new Directory(DOWNLOADS_BASE_DIR, 'movies');
-    if (!moviesDir.exists) {
-      moviesDir.create();
+
+    const moviesDir = `${DOWNLOADS_DIR}movies/`;
+    const moviesInfo = await LegacyFileSystem.getInfoAsync(moviesDir);
+    if (!moviesInfo.exists) {
+      await LegacyFileSystem.makeDirectoryAsync(moviesDir, { intermediates: true });
     }
-    
-    const tvDir = new Directory(DOWNLOADS_BASE_DIR, 'tv');
-    if (!tvDir.exists) {
-      tvDir.create();
+
+    const tvDir = `${DOWNLOADS_DIR}tv/`;
+    const tvInfo = await LegacyFileSystem.getInfoAsync(tvDir);
+    if (!tvInfo.exists) {
+      await LegacyFileSystem.makeDirectoryAsync(tvDir, { intermediates: true });
     }
   } catch (error) {
     console.error('Error initializing downloads directory:', error);
@@ -283,10 +286,15 @@ export const markAsWatched = async (downloadId) => {
 
 export const getDownloadStorageUsage = async () => {
   try {
-    if (DOWNLOADS_BASE_DIR.exists) {
-      return DOWNLOADS_BASE_DIR.size || 0;
+    const index = await getDownloadsIndex();
+    const downloads = Object.values(index.downloads);
+    let totalSize = 0;
+    for (const download of downloads) {
+      if (download.status === DOWNLOAD_STATUS.COMPLETED && download.fileSize) {
+        totalSize += download.fileSize;
+      }
     }
-    return 0;
+    return totalSize;
   } catch (error) {
     console.error('Error getting download storage usage:', error);
     return 0;
@@ -296,21 +304,39 @@ export const getDownloadStorageUsage = async () => {
 export const deleteDownloadFiles = async (downloadId) => {
   try {
     const entry = await getDownloadEntry(downloadId);
-    if (entry && entry.filePath) {
-      try {
-        const dir = new Directory(entry.filePath);
-        if (dir.exists) {
-          dir.delete();
-        }
-      } catch {
-        try {
-          const file = new File(entry.filePath);
-          if (file.exists) {
-            file.delete();
+    if (entry) {
+      const contentDir = getContentDirectory(entry.mediaType, entry.tmdbId, entry.season, entry.episode);
+      const contentDirInfo = await LegacyFileSystem.getInfoAsync(contentDir);
+      if (contentDirInfo.exists) {
+        await LegacyFileSystem.deleteAsync(contentDir, { idempotent: true });
+      }
+
+      if (entry.mediaType === 'tv' && entry.season !== null) {
+        const seasonDir = `${DOWNLOADS_DIR}tv/${entry.tmdbId}/s${entry.season}/`;
+        const seasonInfo = await LegacyFileSystem.getInfoAsync(seasonDir);
+        if (seasonInfo.exists) {
+          const seasonContents = await LegacyFileSystem.readDirectoryAsync(seasonDir);
+          if (seasonContents.length === 0) {
+            await LegacyFileSystem.deleteAsync(seasonDir, { idempotent: true });
+
+            const showDir = `${DOWNLOADS_DIR}tv/${entry.tmdbId}/`;
+            const showInfo = await LegacyFileSystem.getInfoAsync(showDir);
+            if (showInfo.exists) {
+              const showContents = await LegacyFileSystem.readDirectoryAsync(showDir);
+              if (showContents.length === 0) {
+                await LegacyFileSystem.deleteAsync(showDir, { idempotent: true });
+              }
+            }
           }
-        } catch (e) {
-          console.warn('Failed to delete with new API, trying legacy:', e);
-          await LegacyFileSystem.deleteAsync(entry.filePath, { idempotent: true });
+        }
+      } else if (entry.mediaType === 'movie') {
+        const movieDir = `${DOWNLOADS_DIR}movies/${entry.tmdbId}/`;
+        const movieInfo = await LegacyFileSystem.getInfoAsync(movieDir);
+        if (movieInfo.exists) {
+          const movieContents = await LegacyFileSystem.readDirectoryAsync(movieDir);
+          if (movieContents.length === 0) {
+            await LegacyFileSystem.deleteAsync(movieDir, { idempotent: true });
+          }
         }
       }
     }
@@ -334,8 +360,9 @@ export const deleteDownload = async (downloadId) => {
 
 export const clearAllDownloads = async () => {
   try {
-    if (DOWNLOADS_BASE_DIR.exists) {
-      DOWNLOADS_BASE_DIR.delete();
+    const info = await LegacyFileSystem.getInfoAsync(DOWNLOADS_DIR);
+    if (info.exists) {
+      await LegacyFileSystem.deleteAsync(DOWNLOADS_DIR, { idempotent: true });
     }
     await initializeDownloadsDirectory();
     await AsyncStorage.setItem(DOWNLOADS_INDEX_KEY, JSON.stringify({
@@ -343,6 +370,7 @@ export const clearAllDownloads = async () => {
       lastUpdated: new Date().toISOString(),
       downloads: {}
     }));
+    await AsyncStorage.removeItem(DOWNLOAD_QUEUE_KEY);
     return true;
   } catch (error) {
     console.error('Error clearing all downloads:', error);

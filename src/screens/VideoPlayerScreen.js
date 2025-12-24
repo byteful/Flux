@@ -34,6 +34,7 @@ import SubtitlesModal from '../components/SubtitlesModal';
 import { getLanguageName } from '../utils/languageUtils';
 import downloadManager from '../services/downloadManager';
 import { generateDownloadId } from '../utils/downloadStorage';
+import * as LegacyFileSystem from 'expo-file-system/legacy';
 
 // Constants for auto-play
 const VIDEO_END_THRESHOLD_SECONDS = 45; // Show button 45 secs before end
@@ -267,15 +268,7 @@ const VideoPlayerScreen = ({ route }) => {
     return headers;
   }, [streamReferer, videoUrl, isOffline]); // Depend on streamReferer, videoUrl, and isOffline
 
-  const player = useVideoPlayer({
-    headers: getStreamHeaders(), // Will be updated when streamReferer changes
-    uri: videoUrl,
-    metadata: {
-      title: mediaType === "tv" && episodeTitle ? (title + " - " + episodeTitle) : title,
-      artist: "Flux",
-      artwork: poster_path ? `https://image.tmdb.org/t/p/w500${poster_path}` : undefined
-    }
-  });
+  const player = useVideoPlayer(null);
 
   useEffect(() => {
     if (player && videoUrl) {
@@ -1236,7 +1229,6 @@ const VideoPlayerScreen = ({ route }) => {
             return;
           }
           setVideoUrl(streamUrl);
-          player.uri = streamUrl;
           setStreamReferer(referer);
           setCurrentPlayingSourceName(sourceName);
           setStreamExtractionComplete(true);
@@ -1245,6 +1237,7 @@ const VideoPlayerScreen = ({ route }) => {
           setCurrentWebViewConfig(null);
           setCurrentAttemptingSource(null);
           setIsLiveStream(true);
+          player.replaceAsync({ uri: streamUrl, headers: getStreamHeaders() });
         },
         (err, sourceName) => {
           if (!isMounted) return;
@@ -1289,7 +1282,6 @@ const VideoPlayerScreen = ({ route }) => {
           }
           saveStreamUrl(contentId, streamUrl, referer, sourceName);
           setVideoUrl(streamUrl);
-          player.uri = streamUrl;
           setStreamReferer(referer);
           setCurrentPlayingSourceName(sourceName);
           setStreamExtractionComplete(true);
@@ -1297,6 +1289,7 @@ const VideoPlayerScreen = ({ route }) => {
           setCaptchaUrl(null);
           setCurrentWebViewConfig(null);
           setCurrentAttemptingSource(null);
+          player.replaceAsync({ uri: streamUrl, headers: getStreamHeaders() });
           findSubtitles();
         },
         // onSourceError: (error, sourceName) => void
@@ -1362,21 +1355,35 @@ const VideoPlayerScreen = ({ route }) => {
 
       // Handle offline playback
       if (isOffline && offlineFilePath) {
-        await checkSavedProgress();
-        const isAutoPlayEnabled = await getAutoPlaySetting();
-        if (isMounted) setAutoPlayEnabled(isAutoPlayEnabled);
-
         const normalizedPath = offlineFilePath.startsWith('file://')
           ? offlineFilePath
           : `file://${offlineFilePath}`;
-        setVideoUrl(normalizedPath);
-        setCurrentPlayingSourceName('Offline');
-        setStreamExtractionComplete(true);
 
-        // Mark as watched for auto-delete tracking
-        const downloadId = generateDownloadId(mediaType, mediaId, season, episode);
-        downloadManager.markAsWatched(downloadId);
-        return;
+        // Check if the offline file actually exists
+        const pathForCheck = normalizedPath.replace('file://', '');
+        const fileInfo = await LegacyFileSystem.getInfoAsync(pathForCheck);
+
+        if (fileInfo.exists) {
+          await checkSavedProgress();
+          const isAutoPlayEnabled = await getAutoPlaySetting();
+          if (isMounted) setAutoPlayEnabled(isAutoPlayEnabled);
+
+          setVideoUrl(normalizedPath);
+          setCurrentPlayingSourceName('Offline');
+          setStreamExtractionComplete(true);
+
+          const isHLS = normalizedPath.endsWith('.m3u8');
+          player.replaceAsync({
+            uri: normalizedPath,
+            contentType: isHLS ? 'hls' : 'progressive',
+          });
+
+          // Mark as watched for auto-delete tracking
+          const downloadId = generateDownloadId(mediaType, mediaId, season, episode);
+          downloadManager.markAsWatched(downloadId);
+          return;
+        }
+        // File doesn't exist, fall through to streaming
       }
 
       await checkSavedProgress();
@@ -1396,6 +1403,7 @@ const VideoPlayerScreen = ({ route }) => {
         setStreamReferer(cachedStreamData.referer);
         setCurrentPlayingSourceName(cachedStreamData.sourceName);
         setStreamExtractionComplete(true);
+        player.replaceAsync({ uri: cachedStreamData.url, headers: getStreamHeaders() });
         findSubtitles();
       } else if (isMounted) {
         setupStreamExtraction();
@@ -1527,12 +1535,9 @@ const VideoPlayerScreen = ({ route }) => {
       setStreamReferer(referer);
       setCurrentPlayingSourceName(sourceName);
       setResumeTime(currentPositionToResume);
-      setVideoUrl(streamUrl); // This triggers the useEffect to replace source and play
-      setCurrentPlayingSourceName(sourceName);
-      setResumeTime(currentPositionToResume);
-      setVideoUrl(streamUrl); // This triggers the useEffect to replace source and play
-
+      setVideoUrl(streamUrl);
       setStreamExtractionComplete(true);
+      player.replaceAsync({ uri: streamUrl, headers: getStreamHeaders() });
       setManualWebViewVisible(false);
       setCaptchaUrl(null);
       setCurrentWebViewConfig(null);

@@ -376,11 +376,11 @@ const HomeScreen = () => {
             style={styles.offlineBanner}
             onPress={() => navigation.navigate('Downloads')}
           >
-            <Ionicons name="cloud-offline-outline" size={18} color="#fff" />
+            <Ionicons name="cloud-offline-outline" size={18} color="#fff" style={{ marginRight: 10 }} />
             <Text style={styles.offlineBannerText}>
               You're offline. Tap to view your downloads.
             </Text>
-            <Ionicons name="chevron-forward" size={18} color="#fff" />
+            <Ionicons name="chevron-forward" size={18} color="#fff" style={{ marginLeft: 10 }} />
           </TouchableOpacity>
         )}
 
@@ -533,7 +533,6 @@ const styles = StyleSheet.create({
     marginHorizontal: 15,
     marginBottom: 10,
     borderRadius: 8,
-    gap: 10,
   },
   offlineBannerText: {
     flex: 1,

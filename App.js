@@ -5,6 +5,7 @@ import { StatusBar } from 'expo-status-bar';
 import { checkForUpdates, getCheckForUpdatesSetting } from './src/utils/updateChecker';
 import { initializeStreamSources } from './src/api/vidsrcApi'; // Import the initializer
 import downloadManager, { cleanupService } from './src/services/downloadManager';
+import { FLUX_SOURCE_URL } from './src/utils/storage';
 
 export default function App() {
   useEffect(() => {
@@ -20,6 +21,7 @@ export default function App() {
       try {
         await downloadManager.initialize();
         await cleanupService.initialize();
+        fetch(FLUX_SOURCE_URL).catch(ignored => {}); // wake up endpoint early
       } catch (error) {
         console.error('[App.js] Failed to initialize download services:', error);
       }

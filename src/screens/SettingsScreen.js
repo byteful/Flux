@@ -408,13 +408,18 @@ const SettingsScreen = () => {
   };
 
   const handleClearAllDownloads = () => {
-    if (totalDownloadsCount === 0) {
+    if (totalDownloadsCount === 0 && downloadStorageUsed === 0) {
       Alert.alert('No Downloads', 'There are no downloads to clear.');
       return;
     }
+
+    const message = totalDownloadsCount > 0
+      ? `Are you sure you want to delete all ${totalDownloadsCount} downloads? This will free up ${formatFileSize(downloadStorageUsed)}.`
+      : `There are orphaned files using ${formatFileSize(downloadStorageUsed)}. Clear them?`;
+
     Alert.alert(
       'Clear All Downloads',
-      `Are you sure you want to delete all ${totalDownloadsCount} downloads? This will free up ${formatFileSize(downloadStorageUsed)}.`,
+      message,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -424,8 +429,8 @@ const SettingsScreen = () => {
             try {
               await downloadManager.cancelAllDownloads();
               await clearAllDownloads();
-              setDownloadStorageUsed(0);
-              setTotalDownloadsCount(0);
+              await refreshDownloadData();
+              await refreshStorageData();
               Alert.alert('Success', 'All downloads have been cleared.');
             } catch (error) {
               console.error('Error clearing downloads:', error);

@@ -252,7 +252,11 @@ class HLSDownloader {
 
     for (const segment of this.segments) {
       playlistContent += `#EXTINF:${segment.duration.toFixed(6)},\n`;
-      playlistContent += `segments/${segment.localFilename}\n`;
+      let absoluteSegmentPath = `${this.segmentsDir}${segment.localFilename}`;
+      if (absoluteSegmentPath.startsWith('file://')) {
+        absoluteSegmentPath = absoluteSegmentPath.replace('file://', '');
+      }
+      playlistContent += `${absoluteSegmentPath}\n`;
     }
 
     playlistContent += '#EXT-X-ENDLIST\n';

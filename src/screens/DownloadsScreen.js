@@ -103,9 +103,12 @@ const DownloadsScreen = () => {
   };
 
   const handlePlay = (item) => {
-    const basePath = item.filePath.endsWith('.m3u8')
-      ? item.filePath
-      : `${item.filePath}video.m3u8`;
+    let basePath;
+    if (item.filePath.endsWith('.m3u8') || item.filePath.endsWith('.mp4')) {
+      basePath = item.filePath;
+    } else {
+      basePath = `${item.filePath}video.m3u8`;
+    }
     const offlinePath = basePath.startsWith('file://')
       ? basePath
       : `file://${basePath}`;
