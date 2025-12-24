@@ -1195,17 +1195,8 @@ const VideoPlayerScreen = ({ route }) => {
     let isMounted = true;
     setIsUnmounting(false);
     
-    const setOrientationToLandscape = async () => {
-      await new Promise(resolve => setTimeout(resolve, 300));
-      if (!isMounted) return;
-      try {
-        await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
-      } catch (e) {
-        console.error("Failed to lock orientation to landscape:", e);
-      }
-    };
-    
-    setOrientationToLandscape();
+    ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE)
+      .catch(e => console.error("Failed to lock orientation to landscape:", e));
 
     const checkSavedProgress = async () => {
       if (isLive) {
@@ -1421,9 +1412,6 @@ const VideoPlayerScreen = ({ route }) => {
           clearTimeout(rightSeekTimeoutRef.current);
           rightSeekTimeoutRef.current = null;
         }
-        
-        ScreenOrientation.unlockAsync()
-          .catch(e => console.error("Failed to unlock orientation in cleanup:", e));
       } catch (e) {
         console.error("Cleanup error:", e);
       }

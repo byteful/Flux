@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -11,6 +11,8 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useFocusEffect } from '@react-navigation/native';
+import * as ScreenOrientation from 'expo-screen-orientation';
 import { fetchTVShowDetails, fetchSeasonDetails, fetchMovieDetails, getImageUrl, fetchMovieRecommendations } from '../api/tmdbApi';
 import { getShowWatchProgress, getEpisodeWatchProgress } from '../utils/storage'; // Import progress functions
 import { Ionicons } from '@expo/vector-icons';
@@ -43,6 +45,13 @@ const DetailScreen = ({ route, navigation }) => {
     // const airDateUTC = new Date(Date.UTC(airDate.getFullYear(), airDate.getMonth(), airDate.getDate()));
     // return airDateUTC > todayUTC;
   };
+
+  useFocusEffect(
+    useCallback(() => {
+      ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP)
+        .catch(e => console.warn("Failed to lock DetailScreen orientation:", e));
+    }, [])
+  );
 
   useEffect(() => {
     const fetchDetails = async () => {
@@ -111,7 +120,7 @@ const DetailScreen = ({ route, navigation }) => {
           // Fetch movie recommendations AFTER details are fetched
           setLoadingRecommendations(true);
           const recs = await fetchMovieRecommendations(mediaId);
-          setRecommendations(recs);
+          setRecommendations(recs.slice(0, 18));
           setLoadingRecommendations(false);
         }
       } catch (error) {
@@ -321,15 +330,6 @@ const DetailScreen = ({ route, navigation }) => {
       </TouchableOpacity>
     );
   };
-
-  const renderRecommendation = ({ item }) => (
-    <MediaCard
-      item={item}
-      onPress={() => handleRecommendationPress(item)}
-      // Add specific styling for recommendations if needed, or use default MediaCard style
-      style={styles.recommendationCard}
-    />
-  );
 
   const displayTitle = mediaType === 'tv' ? details.name : details.title;
   const releaseDate = mediaType === 'tv' ? details.first_air_date : details.release_date;
@@ -553,14 +553,15 @@ const DetailScreen = ({ route, navigation }) => {
               {recommendations.length > 0 && (
                 <View style={styles.recommendationsSection}>
                   <Text style={styles.sectionTitle}>More Like This</Text>
-                  <FlatList
-                    horizontal
-                    data={recommendations}
-                    renderItem={renderRecommendation}
-                    keyExtractor={(item) => `rec-${item.id}`}
-                    showsHorizontalScrollIndicator={false}
-                    contentContainerStyle={styles.recommendationsList}
-                  />
+                  <View style={styles.recommendationsGrid}>
+                    {recommendations.map((item) => (
+                      <MediaCard
+                        key={`rec-${item.id}`}
+                        item={item}
+                        onPress={() => handleRecommendationPress(item)}
+                      />
+                    ))}
+                  </View>
                 </View>
               )}
               {loadingRecommendations && (
@@ -897,19 +898,15 @@ const styles = StyleSheet.create({
   },
   // Recommendations Styles
   recommendationsSection: {
-    paddingHorizontal: 15,
+    paddingHorizontal: 8,
     paddingVertical: 15,
-    borderTopWidth: 1, // Add separator line above recommendations
+    borderTopWidth: 1,
     borderTopColor: '#222',
   },
-  recommendationsList: {
-    // paddingHorizontal: 15, // Add padding to the container
-    paddingRight: 5,
-  },
-  recommendationCard: {
-    marginRight: 10, // Space between recommendation cards
-    width: 110, // Adjust width as needed
-    // Add any specific styling overrides for MediaCard in this context
+  recommendationsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-start',
   },
   loadingRecommendationsContainer: {
     paddingVertical: 20,
