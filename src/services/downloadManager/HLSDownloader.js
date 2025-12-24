@@ -1,4 +1,6 @@
 import * as FileSystem from 'expo-file-system';
+import { File } from 'expo-file-system';
+import * as LegacyFileSystem from 'expo-file-system/legacy';
 import storageManager from './StorageManager';
 import { ensureDirectoryExists } from '../../utils/downloadStorage';
 
@@ -217,12 +219,12 @@ class HLSDownloader {
           headers['Referer'] = this.entry.streamReferer;
         }
 
-        const result = await FileSystem.downloadAsync(segment.url, filePath, { headers });
+        const result = await LegacyFileSystem.downloadAsync(segment.url, filePath, { headers });
 
         if (result.status >= 200 && result.status < 300) {
-          const fileInfo = await FileSystem.getInfoAsync(filePath, { size: true });
-          if (fileInfo.exists && fileInfo.size > 0) {
-            this.totalBytesDownloaded += fileInfo.size;
+          const file = new File(filePath);
+          if (file.exists && file.size > 0) {
+            this.totalBytesDownloaded += file.size;
             segment.localPath = filePath;
             segment.localFilename = filename;
             return;
@@ -256,7 +258,8 @@ class HLSDownloader {
     playlistContent += '#EXT-X-ENDLIST\n';
 
     const localM3u8Path = `${this.contentDir}video.m3u8`;
-    await FileSystem.writeAsStringAsync(localM3u8Path, playlistContent);
+    const file = new File(localM3u8Path);
+    file.write(playlistContent);
 
     return localM3u8Path;
   }

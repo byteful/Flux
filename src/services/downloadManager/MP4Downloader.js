@@ -1,4 +1,6 @@
 import * as FileSystem from 'expo-file-system';
+import { File } from 'expo-file-system';
+import * as LegacyFileSystem from 'expo-file-system/legacy';
 import { ensureDirectoryExists } from '../../utils/downloadStorage';
 
 class MP4Downloader {
@@ -30,7 +32,7 @@ class MP4Downloader {
 
       this.reportProgress(0, 'downloading');
 
-      this.downloadResumable = FileSystem.createDownloadResumable(
+      this.downloadResumable = LegacyFileSystem.createDownloadResumable(
         this.entry.streamUrl,
         videoPath,
         { headers },
@@ -54,9 +56,9 @@ class MP4Downloader {
         throw new Error(`Download failed with status: ${result?.status || 'unknown'}`);
       }
 
-      const fileInfo = await FileSystem.getInfoAsync(videoPath, { size: true });
+      const file = new File(videoPath);
 
-      if (!fileInfo.exists || fileInfo.size === 0) {
+      if (!file.exists || file.size === 0) {
         throw new Error('Download completed but file is empty or missing');
       }
 
@@ -65,7 +67,7 @@ class MP4Downloader {
       if (this.onComplete) {
         this.onComplete({
           filePath: videoPath,
-          fileSize: fileInfo.size,
+          fileSize: file.size,
         });
       }
     } catch (error) {
@@ -98,14 +100,14 @@ class MP4Downloader {
         if (this.isCancelled) return;
 
         if (result) {
-          const fileInfo = await FileSystem.getInfoAsync(result.uri, { size: true });
+          const file = new File(result.uri);
 
           this.reportProgress(100, 'completed');
 
           if (this.onComplete) {
             this.onComplete({
               filePath: result.uri,
-              fileSize: fileInfo.size || 0,
+              fileSize: file.size || 0,
             });
           }
         }

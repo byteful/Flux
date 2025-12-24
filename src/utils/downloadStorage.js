@@ -1,11 +1,14 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system';
+import { Directory, File, Paths } from 'expo-file-system';
+import * as LegacyFileSystem from 'expo-file-system/legacy';
 
 const DOWNLOADS_INDEX_KEY = 'downloads_index';
 const DOWNLOAD_SETTINGS_KEY = 'download_settings';
 const DOWNLOAD_QUEUE_KEY = 'download_queue';
 
 const DOWNLOADS_DIR = `${FileSystem.documentDirectory}downloads/`;
+const DOWNLOADS_BASE_DIR = new Directory(Paths.document, 'downloads');
 
 export const DEFAULT_DOWNLOAD_SETTINGS = {
   wifiOnlyDownload: true,
@@ -40,9 +43,14 @@ export const getContentDirectory = (mediaType, tmdbId, season = null, episode = 
 
 export const ensureDirectoryExists = async (dirPath) => {
   try {
-    const dirInfo = await FileSystem.getInfoAsync(dirPath);
-    if (!dirInfo.exists) {
-      await FileSystem.makeDirectoryAsync(dirPath, { intermediates: true });
+    const pathParts = dirPath.replace(FileSystem.documentDirectory, '').split('/').filter(Boolean);
+    let currentDir = new Directory(Paths.document);
+    
+    for (const part of pathParts) {
+      currentDir = new Directory(currentDir, part);
+      if (!currentDir.exists) {
+        currentDir.create();
+      }
     }
     return true;
   } catch (error) {
@@ -52,9 +60,23 @@ export const ensureDirectoryExists = async (dirPath) => {
 };
 
 export const initializeDownloadsDirectory = async () => {
-  await ensureDirectoryExists(DOWNLOADS_DIR);
-  await ensureDirectoryExists(`${DOWNLOADS_DIR}movies/`);
-  await ensureDirectoryExists(`${DOWNLOADS_DIR}tv/`);
+  try {
+    if (!DOWNLOADS_BASE_DIR.exists) {
+      DOWNLOADS_BASE_DIR.create();
+    }
+    
+    const moviesDir = new Directory(DOWNLOADS_BASE_DIR, 'movies');
+    if (!moviesDir.exists) {
+      moviesDir.create();
+    }
+    
+    const tvDir = new Directory(DOWNLOADS_BASE_DIR, 'tv');
+    if (!tvDir.exists) {
+      tvDir.create();
+    }
+  } catch (error) {
+    console.error('Error initializing downloads directory:', error);
+  }
 };
 
 export const saveDownloadSettings = async (settings) => {
@@ -261,9 +283,8 @@ export const markAsWatched = async (downloadId) => {
 
 export const getDownloadStorageUsage = async () => {
   try {
-    const dirInfo = await FileSystem.getInfoAsync(DOWNLOADS_DIR, { size: true });
-    if (dirInfo.exists) {
-      return dirInfo.size || 0;
+    if (DOWNLOADS_BASE_DIR.exists) {
+      return DOWNLOADS_BASE_DIR.size || 0;
     }
     return 0;
   } catch (error) {
@@ -276,9 +297,21 @@ export const deleteDownloadFiles = async (downloadId) => {
   try {
     const entry = await getDownloadEntry(downloadId);
     if (entry && entry.filePath) {
-      const fileInfo = await FileSystem.getInfoAsync(entry.filePath);
-      if (fileInfo.exists) {
-        await FileSystem.deleteAsync(entry.filePath, { idempotent: true });
+      try {
+        const dir = new Directory(entry.filePath);
+        if (dir.exists) {
+          dir.delete();
+        }
+      } catch {
+        try {
+          const file = new File(entry.filePath);
+          if (file.exists) {
+            file.delete();
+          }
+        } catch (e) {
+          console.warn('Failed to delete with new API, trying legacy:', e);
+          await LegacyFileSystem.deleteAsync(entry.filePath, { idempotent: true });
+        }
       }
     }
     return true;
@@ -301,9 +334,8 @@ export const deleteDownload = async (downloadId) => {
 
 export const clearAllDownloads = async () => {
   try {
-    const dirInfo = await FileSystem.getInfoAsync(DOWNLOADS_DIR);
-    if (dirInfo.exists) {
-      await FileSystem.deleteAsync(DOWNLOADS_DIR, { idempotent: true });
+    if (DOWNLOADS_BASE_DIR.exists) {
+      DOWNLOADS_BASE_DIR.delete();
     }
     await initializeDownloadsDirectory();
     await AsyncStorage.setItem(DOWNLOADS_INDEX_KEY, JSON.stringify({

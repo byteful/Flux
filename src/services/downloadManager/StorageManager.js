@@ -1,4 +1,6 @@
 import * as FileSystem from 'expo-file-system';
+import { File, Directory } from 'expo-file-system';
+import * as LegacyFileSystem from 'expo-file-system/legacy';
 import {
   getDownloadsDirectory,
   getContentDirectory,
@@ -24,7 +26,7 @@ class StorageManager {
       const dirPath = destPath.substring(0, destPath.lastIndexOf('/'));
       await ensureDirectoryExists(dirPath);
 
-      const downloadResumable = FileSystem.createDownloadResumable(
+      const downloadResumable = LegacyFileSystem.createDownloadResumable(
         url,
         destPath,
         { headers },
@@ -60,7 +62,7 @@ class StorageManager {
       const dirPath = destPath.substring(0, destPath.lastIndexOf('/'));
       await ensureDirectoryExists(dirPath);
 
-      const result = await FileSystem.downloadAsync(url, destPath, { headers });
+      const result = await LegacyFileSystem.downloadAsync(url, destPath, { headers });
       return {
         success: result.status >= 200 && result.status < 300,
         uri: result.uri,
@@ -79,7 +81,8 @@ class StorageManager {
     try {
       const dirPath = filePath.substring(0, filePath.lastIndexOf('/'));
       await ensureDirectoryExists(dirPath);
-      await FileSystem.writeAsStringAsync(filePath, content);
+      const file = new File(filePath);
+      file.write(content);
       return true;
     } catch (error) {
       console.error('StorageManager writeFile error:', error);
@@ -89,8 +92,11 @@ class StorageManager {
 
   async readFile(filePath) {
     try {
-      const content = await FileSystem.readAsStringAsync(filePath);
-      return content;
+      const file = new File(filePath);
+      if (!file.exists) {
+        return null;
+      }
+      return file.text();
     } catch (error) {
       console.error('StorageManager readFile error:', error);
       return null;
@@ -99,9 +105,9 @@ class StorageManager {
 
   async deleteFile(filePath) {
     try {
-      const fileInfo = await FileSystem.getInfoAsync(filePath);
-      if (fileInfo.exists) {
-        await FileSystem.deleteAsync(filePath, { idempotent: true });
+      const file = new File(filePath);
+      if (file.exists) {
+        file.delete();
       }
       return true;
     } catch (error) {
@@ -112,9 +118,9 @@ class StorageManager {
 
   async deleteDirectory(dirPath) {
     try {
-      const dirInfo = await FileSystem.getInfoAsync(dirPath);
-      if (dirInfo.exists) {
-        await FileSystem.deleteAsync(dirPath, { idempotent: true });
+      const dir = new Directory(dirPath);
+      if (dir.exists) {
+        dir.delete();
       }
       return true;
     } catch (error) {
@@ -125,8 +131,8 @@ class StorageManager {
 
   async fileExists(filePath) {
     try {
-      const fileInfo = await FileSystem.getInfoAsync(filePath);
-      return fileInfo.exists;
+      const file = new File(filePath);
+      return file.exists;
     } catch (error) {
       console.error('StorageManager fileExists error:', error);
       return false;
@@ -135,8 +141,16 @@ class StorageManager {
 
   async getFileInfo(filePath) {
     try {
-      const fileInfo = await FileSystem.getInfoAsync(filePath, { size: true });
-      return fileInfo;
+      const file = new File(filePath);
+      if (!file.exists) {
+        return null;
+      }
+      return {
+        exists: file.exists,
+        size: file.size,
+        uri: file.uri,
+        isDirectory: false
+      };
     } catch (error) {
       console.error('StorageManager getFileInfo error:', error);
       return null;
@@ -145,8 +159,12 @@ class StorageManager {
 
   async getDirectoryContents(dirPath) {
     try {
-      const contents = await FileSystem.readDirectoryAsync(dirPath);
-      return contents;
+      const dir = new Directory(dirPath);
+      if (!dir.exists) {
+        return [];
+      }
+      const contents = dir.list();
+      return contents.map(item => item.name);
     } catch (error) {
       console.error('StorageManager getDirectoryContents error:', error);
       return [];
@@ -155,22 +173,24 @@ class StorageManager {
 
   async getDirectorySize(dirPath) {
     try {
-      const dirInfo = await FileSystem.getInfoAsync(dirPath, { size: true });
-      if (dirInfo.exists && dirInfo.size !== undefined) {
-        return dirInfo.size;
-      }
-
       let totalSize = 0;
       const contents = await this.getDirectoryContents(dirPath);
 
       for (const item of contents) {
         const itemPath = `${dirPath}/${item}`;
-        const itemInfo = await FileSystem.getInfoAsync(itemPath, { size: true });
-        if (itemInfo.exists) {
-          if (itemInfo.isDirectory) {
+        try {
+          const dir = new Directory(itemPath);
+          if (dir.exists) {
             totalSize += await this.getDirectorySize(itemPath);
-          } else if (itemInfo.size) {
-            totalSize += itemInfo.size;
+          }
+        } catch {
+          try {
+            const file = new File(itemPath);
+            if (file.exists) {
+              totalSize += file.size || 0;
+            }
+          } catch (e) {
+            console.warn('Error checking item:', itemPath, e);
           }
         }
       }
@@ -184,7 +204,7 @@ class StorageManager {
 
   async getAvailableStorage() {
     try {
-      const freeSpace = await FileSystem.getFreeDiskStorageAsync();
+      const freeSpace = await LegacyFileSystem.getFreeDiskStorageAsync();
       return freeSpace;
     } catch (error) {
       console.error('StorageManager getAvailableStorage error:', error);
@@ -194,7 +214,7 @@ class StorageManager {
 
   async getTotalStorage() {
     try {
-      const totalSpace = await FileSystem.getTotalDiskCapacityAsync();
+      const totalSpace = await LegacyFileSystem.getTotalDiskCapacityAsync();
       return totalSpace;
     } catch (error) {
       console.error('StorageManager getTotalStorage error:', error);
@@ -204,9 +224,13 @@ class StorageManager {
 
   async copyFile(sourcePath, destPath) {
     try {
+      const sourceFile = new File(sourcePath);
+      const destFile = new File(destPath);
+      
       const dirPath = destPath.substring(0, destPath.lastIndexOf('/'));
       await ensureDirectoryExists(dirPath);
-      await FileSystem.copyAsync({ from: sourcePath, to: destPath });
+      
+      sourceFile.copy(destFile);
       return true;
     } catch (error) {
       console.error('StorageManager copyFile error:', error);
@@ -216,9 +240,13 @@ class StorageManager {
 
   async moveFile(sourcePath, destPath) {
     try {
+      const sourceFile = new File(sourcePath);
+      const destFile = new File(destPath);
+      
       const dirPath = destPath.substring(0, destPath.lastIndexOf('/'));
       await ensureDirectoryExists(dirPath);
-      await FileSystem.moveAsync({ from: sourcePath, to: destPath });
+      
+      sourceFile.move(destFile);
       return true;
     } catch (error) {
       console.error('StorageManager moveFile error:', error);

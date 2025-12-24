@@ -119,11 +119,58 @@ class DownloadManager {
       if (!next) break;
 
       if (!next.streamUrl) {
-        console.log(`Download ${next.id} needs stream URL before downloading`);
+        console.log(`Download ${next.id} needs stream URL, attempting to fetch...`);
+        
+        this.fetchAndStartDownload(next).catch(error => {
+          console.error(`Failed to fetch stream URL for ${next.id}:`, error);
+          this.handleError(next.id, error);
+        });
+        
         continue;
       }
 
       this.startDownload(next);
+    }
+  }
+
+  async fetchAndStartDownload(entry) {
+    try {
+      const { getActiveStreamSources } = require('../api/vidsrcApi');
+      const sources = getActiveStreamSources();
+      
+      const fluxSource = sources.find(s => s.name === 'FluxSource');
+      
+      if (!fluxSource) {
+        throw new Error('FluxSource not available for downloads');
+      }
+
+      console.log(`Fetching stream URL from FluxSource for ${entry.id}...`);
+      
+      let fetchUrl;
+      if (entry.mediaType === 'tv') {
+        fetchUrl = `${fluxSource.baseUrl}?tmdbId=${entry.tmdbId}&season=${entry.season}&episode=${entry.episode}`;
+      } else {
+        fetchUrl = `${fluxSource.baseUrl}?tmdbId=${entry.tmdbId}`;
+      }
+
+      const response = await fetch(fetchUrl);
+      const result = await response.json();
+      
+      if (result.error || !result.url) {
+        throw new Error(result.error || 'No stream URL found');
+      }
+
+      await this.setStreamUrlForDownload(entry.id, result.url, result.referer);
+      
+      console.log(`Successfully fetched stream URL for ${entry.id}, starting download...`);
+      
+      const updatedEntry = await getDownloadEntry(entry.id);
+      if (updatedEntry) {
+        this.startDownload(updatedEntry);
+      }
+    } catch (error) {
+      console.error(`Error fetching stream URL for ${entry.id}:`, error);
+      throw error;
     }
   }
 
