@@ -13,7 +13,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from '@react-navigation/native';
 import * as ScreenOrientation from 'expo-screen-orientation';
-import { fetchTVShowDetails, fetchSeasonDetails, fetchMovieDetails, getImageUrl, fetchMovieRecommendations } from '../api/tmdbApi';
+import { fetchTVShowDetails, fetchSeasonDetails, fetchMovieDetails, getImageUrl, fetchMovieRecommendations, fetchTVShowRecommendations } from '../api/tmdbApi';
 import { getShowWatchProgress, getEpisodeWatchProgress } from '../utils/storage'; // Import progress functions
 import { Ionicons } from '@expo/vector-icons';
 import MediaCard from '../components/MediaCard';
@@ -28,6 +28,7 @@ const DetailScreen = ({ route, navigation }) => {
   const [displayedEpisodesCount, setDisplayedEpisodesCount] = useState(25);
   const [recommendations, setRecommendations] = useState([]);
   const [loadingRecommendations, setLoadingRecommendations] = useState(false);
+  const [selectedTab, setSelectedTab] = useState('episodes');
   const flatListRef = useRef(null); // Ref for FlatList
   const scrollViewRef = useRef(null);
   const [initialScrollDone, setInitialScrollDone] = useState(false); // To prevent multiple scrolls
@@ -57,12 +58,13 @@ const DetailScreen = ({ route, navigation }) => {
     const fetchDetails = async () => {
       try {
         setLoading(true);
-        setRecommendations([]); // Reset recommendations
+        setRecommendations([]);
         setDisplayedEpisodesCount(25);
         setSeasonDetails(null);
         setSelectedSeason(null);
         setEpisodeProgress({});
         setInitialScrollDone(false);
+        setSelectedTab('episodes');
 
         if (mediaType === 'tv') {
           const mediaDetails = await fetchTVShowDetails(mediaId);
@@ -114,6 +116,12 @@ const DetailScreen = ({ route, navigation }) => {
             const seasonData = await fetchSeasonDetails(mediaId, seasonToLoad);
             setSeasonDetails(seasonData);
           }
+
+          // Fetch TV show recommendations
+          setLoadingRecommendations(true);
+          const recs = await fetchTVShowRecommendations(mediaId);
+          setRecommendations(recs.slice(0, 18));
+          setLoadingRecommendations(false);
         } else {
           const mediaDetails = await fetchMovieDetails(mediaId);
           setDetails(mediaDetails);
@@ -424,6 +432,28 @@ const DetailScreen = ({ route, navigation }) => {
         {/* TV Show-specific content */}
         {mediaType === 'tv' && (
           <>
+            {/* Tab Selector */}
+            <View style={styles.tabContainer}>
+              <TouchableOpacity
+                style={[styles.tab, selectedTab === 'episodes' && styles.tabActive]}
+                onPress={() => setSelectedTab('episodes')}
+              >
+                <Text style={[styles.tabText, selectedTab === 'episodes' && styles.tabTextActive]}>
+                  Episodes
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.tab, selectedTab === 'moreLikeThis' && styles.tabActive]}
+                onPress={() => setSelectedTab('moreLikeThis')}
+              >
+                <Text style={[styles.tabText, selectedTab === 'moreLikeThis' && styles.tabTextActive]}>
+                  More Like This
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {selectedTab === 'episodes' && (
+            <>
             <View style={styles.seasonsContainer}>
               <View style={styles.seasonsScrollViewContainer}>
                 <FlatList
@@ -520,6 +550,30 @@ const DetailScreen = ({ route, navigation }) => {
                 <Text style={styles.noEpisodesText}>Select a season to view episodes.</Text>
               )}
             </View>
+            </>
+            )}
+
+            {selectedTab === 'moreLikeThis' && (
+              <View style={styles.tvRecommendationsSection}>
+                {loadingRecommendations ? (
+                  <View style={styles.loadingRecommendationsContainer}>
+                    <ActivityIndicator size="small" color="#E50914" />
+                  </View>
+                ) : recommendations.length > 0 ? (
+                  <View style={styles.recommendationsGrid}>
+                    {recommendations.map((item) => (
+                      <MediaCard
+                        key={`rec-${item.id}`}
+                        item={item}
+                        onPress={() => handleRecommendationPress(item)}
+                      />
+                    ))}
+                  </View>
+                ) : (
+                  <Text style={styles.noRecommendationsText}>No recommendations available.</Text>
+                )}
+              </View>
+            )}
           </>
         )}
 
@@ -911,6 +965,42 @@ const styles = StyleSheet.create({
   loadingRecommendationsContainer: {
     paddingVertical: 20,
     alignItems: 'center',
+  },
+  // Tab Styles
+  tabContainer: {
+    flexDirection: 'row',
+    paddingHorizontal: 15,
+    paddingTop: 15,
+    paddingBottom: 5,
+    borderBottomWidth: 1,
+    borderBottomColor: '#222',
+  },
+  tab: {
+    marginRight: 25,
+    paddingBottom: 10,
+  },
+  tabActive: {
+    borderBottomWidth: 3,
+    borderBottomColor: '#E50914',
+  },
+  tabText: {
+    color: '#888',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  tabTextActive: {
+    color: '#fff',
+  },
+  // TV Recommendations Styles
+  tvRecommendationsSection: {
+    paddingHorizontal: 8,
+    paddingTop: 15,
+  },
+  noRecommendationsText: {
+    color: '#888',
+    fontSize: 14,
+    textAlign: 'center',
+    paddingVertical: 30,
   },
   // Styles for Unreleased Badge on DetailScreen
   unreleasedEpisodeImageContainer: {
