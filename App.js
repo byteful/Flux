@@ -12,7 +12,6 @@ export default function App() {
       // Initialize stream sources order
       try {
         await initializeStreamSources();
-        console.log('[App.js] Stream sources initialized.');
       } catch (error) {
         console.error('[App.js] Failed to initialize stream sources:', error);
       }
@@ -21,7 +20,6 @@ export default function App() {
       try {
         await downloadManager.initialize();
         await cleanupService.initialize();
-        console.log('[App.js] Download services initialized.');
       } catch (error) {
         console.error('[App.js] Failed to initialize download services:', error);
       }

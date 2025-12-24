@@ -1,9 +1,10 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { NavigationContainer, DarkTheme } from '@react-navigation/native';
 import { createStackNavigator, CardStyleInterpolators } from '@react-navigation/stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
-import { View, Text } from 'react-native';
+import { View, Text, ActivityIndicator, StyleSheet } from 'react-native';
+import networkMonitor from '../services/downloadManager/NetworkMonitor';
 
 import HomeScreen from '../screens/HomeScreen';
 import VideoPlayerScreen from '../screens/VideoPlayerScreen';
@@ -16,66 +17,17 @@ import SportStreamsScreen from '../screens/SportStreamsScreen';
 const Stack = createStackNavigator();
 const Tab = createBottomTabNavigator();
 
-// Main stack navigator that includes screens shared across tabs
-const MainStack = () => {
-  return (
-    <Stack.Navigator
-      screenOptions={{
-        headerStyle: {
-          backgroundColor: '#000',
-          // Remove potential border if it exists
-          borderBottomWidth: 0,
-          shadowOpacity: 0, // Remove shadow as well
-          elevation: 0, // Android shadow
-        },
-        headerTintColor: '#fff',
-        headerTitleStyle: {
-          fontWeight: 'bold',
-        },
-        // Use a simple fade animation for all transitions in this stack
-        cardStyleInterpolator: CardStyleInterpolators.forFadeFromBottomAndroid,
-        // Ensure card background is black during transitions
-        cardStyle: { backgroundColor: '#000' },
-      }}
-    >
-      <Stack.Screen 
-        name="MainTabs" 
-        component={MainTabs} 
-        options={{ headerShown: false }} 
-      />
-      <Stack.Screen 
-        name="VideoPlayer" 
-        component={VideoPlayerScreen} 
-        options={{ headerShown: false, autoHideHomeIndicator: true, gestureEnabled: false }}
-      />
-      <Stack.Screen 
-        name="DetailScreen" 
-        component={DetailScreen}
-        options={({ route }) => ({
-          title: route.params?.title || 'Details',
-          headerBackTitle: '',
-        })}
-      />
-      <Stack.Screen 
-        name="SportStreams" 
-        component={SportStreamsScreen}
-        options={({ route }) => ({
-          title: route.params?.sportName || 'Live Streams',
-          headerBackTitle: '',
-        })}
-      />
-    </Stack.Navigator>
-  );
-};
-
 // Bottom tab navigator
-const MainTabs = () => {
+const MainTabs = ({ route }) => {
+  const initialRoute = route?.params?.initialRoute || 'Home';
+
   return (
     <Tab.Navigator
+      initialRouteName={initialRoute}
       screenOptions={{
         // Disable the header for all tab screens
-        headerShown: false, 
-        tabBarStyle: { 
+        headerShown: false,
+        tabBarStyle: {
           backgroundColor: '#000',
           borderTopColor: '#222',
         },
@@ -127,12 +79,86 @@ const MainTabs = () => {
 };
 
 const AppNavigator = () => {
+  const [isLoading, setIsLoading] = useState(true);
+  const [initialRoute, setInitialRoute] = useState('Home');
+
+  useEffect(() => {
+    const checkConnectivity = async () => {
+      await networkMonitor.start();
+      const networkState = networkMonitor.getState();
+      if (!networkState.isConnected) {
+        setInitialRoute('Downloads');
+      }
+      setIsLoading(false);
+    };
+    checkConnectivity();
+  }, []);
+
+  if (isLoading) {
+    return (
+      <View style={navStyles.loadingContainer}>
+        <ActivityIndicator size="large" color="#E50914" />
+      </View>
+    );
+  }
+
   return (
-    // Use the DarkTheme to ensure consistent background
     <NavigationContainer theme={DarkTheme}>
-      <MainStack />
+      <Stack.Navigator
+        screenOptions={{
+          headerStyle: {
+            backgroundColor: '#000',
+            borderBottomWidth: 0,
+            shadowOpacity: 0,
+            elevation: 0,
+          },
+          headerTintColor: '#fff',
+          headerTitleStyle: {
+            fontWeight: 'bold',
+          },
+          cardStyleInterpolator: CardStyleInterpolators.forFadeFromBottomAndroid,
+          cardStyle: { backgroundColor: '#000' },
+        }}
+      >
+        <Stack.Screen
+          name="MainTabs"
+          component={MainTabs}
+          options={{ headerShown: false }}
+          initialParams={{ initialRoute }}
+        />
+        <Stack.Screen
+          name="VideoPlayer"
+          component={VideoPlayerScreen}
+          options={{ headerShown: false, autoHideHomeIndicator: true, gestureEnabled: false }}
+        />
+        <Stack.Screen
+          name="DetailScreen"
+          component={DetailScreen}
+          options={({ route }) => ({
+            title: route.params?.title || 'Details',
+            headerBackTitle: '',
+          })}
+        />
+        <Stack.Screen
+          name="SportStreams"
+          component={SportStreamsScreen}
+          options={({ route }) => ({
+            title: route.params?.sportName || 'Live Streams',
+            headerBackTitle: '',
+          })}
+        />
+      </Stack.Navigator>
     </NavigationContainer>
   );
 };
+
+const navStyles = StyleSheet.create({
+  loadingContainer: {
+    flex: 1,
+    backgroundColor: '#000',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+});
 
 export default AppNavigator;

@@ -1,8 +1,41 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { TouchableOpacity, View, Text, StyleSheet, ActivityIndicator, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import Svg, { Circle } from 'react-native-svg';
 import downloadManager from '../services/downloadManager';
 import { generateDownloadId, DOWNLOAD_STATUS } from '../utils/downloadStorage';
+
+const CircularProgress = ({ progress, size = 28, strokeWidth = 3, color = '#E50914' }) => {
+  const radius = (size - strokeWidth) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const strokeDashoffset = circumference - (progress / 100) * circumference;
+
+  return (
+    <Svg width={size} height={size}>
+      <Circle
+        cx={size / 2}
+        cy={size / 2}
+        r={radius}
+        stroke="#333"
+        strokeWidth={strokeWidth}
+        fill="none"
+      />
+      <Circle
+        cx={size / 2}
+        cy={size / 2}
+        r={radius}
+        stroke={color}
+        strokeWidth={strokeWidth}
+        fill="none"
+        strokeDasharray={circumference}
+        strokeDashoffset={strokeDashoffset}
+        strokeLinecap="round"
+        rotation="-90"
+        origin={`${size / 2}, ${size / 2}`}
+      />
+    </Svg>
+  );
+};
 
 const DownloadButton = ({
   mediaId,
@@ -52,8 +85,10 @@ const DownloadButton = ({
   useEffect(() => {
     checkStatus();
 
+    if (isSeasonDownload) return;
+
     const unsubscribe = downloadManager.subscribe((event, data) => {
-      if (data?.id === downloadId || (isSeasonDownload && data?.id?.includes(`tv_${mediaId}_s${seasonNumber}`))) {
+      if (data?.id === downloadId) {
         if (event === 'download-progress') {
           setProgress(data.progress);
           setStatus(DOWNLOAD_STATUS.DOWNLOADING);
@@ -244,9 +279,7 @@ const DownloadButton = ({
       <TouchableOpacity style={styles.iconButton} onPress={handlePress} activeOpacity={0.7}>
         {status === DOWNLOAD_STATUS.DOWNLOADING ? (
           <View style={styles.progressContainer}>
-            <View style={[styles.progressRing, { borderColor: '#E50914' }]}>
-              <Text style={styles.progressText}>{Math.round(progress)}%</Text>
-            </View>
+            <CircularProgress progress={progress} size={28} strokeWidth={3} color="#E50914" />
           </View>
         ) : (
           <Ionicons name={iconConfig.name} size={iconSize} color={iconConfig.color} />
@@ -299,19 +332,6 @@ const styles = StyleSheet.create({
     height: 32,
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  progressRing: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    borderWidth: 2,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  progressText: {
-    color: '#E50914',
-    fontSize: 8,
-    fontWeight: 'bold',
   },
   downloadButton: {
     backgroundColor: '#333',

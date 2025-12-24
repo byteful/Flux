@@ -37,7 +37,7 @@ class CleanupService {
     const status = await BackgroundFetch.getStatusAsync();
     if (status === BackgroundFetch.BackgroundFetchStatus.Restricted ||
         status === BackgroundFetch.BackgroundFetchStatus.Denied) {
-      console.log('Background fetch is not available');
+      console.warn('Background fetch is not available');
       return;
     }
 
@@ -94,10 +94,6 @@ class CleanupService {
             console.error(`Failed to delete download ${download.id}:`, deleteError);
           }
         }
-      }
-
-      if (deletedItems.length > 0) {
-        console.log(`Cleanup: Deleted ${deletedItems.length} downloads:`, deletedItems);
       }
 
       return deletedItems;

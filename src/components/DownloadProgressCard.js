@@ -6,8 +6,6 @@ import { formatFileSize, DOWNLOAD_STATUS } from '../utils/downloadStorage';
 
 const DownloadProgressCard = ({
   item,
-  onPause,
-  onResume,
   onCancel,
   onRetry,
 }) => {
@@ -54,11 +52,9 @@ const DownloadProgressCard = ({
   const getActionIcon = () => {
     switch (status) {
       case DOWNLOAD_STATUS.QUEUED:
-        return 'close-circle-outline';
       case DOWNLOAD_STATUS.DOWNLOADING:
-        return 'pause-circle-outline';
       case DOWNLOAD_STATUS.PAUSED:
-        return 'play-circle-outline';
+        return 'close-circle-outline';
       case DOWNLOAD_STATUS.FAILED:
         return 'refresh-circle-outline';
       default:
@@ -69,13 +65,9 @@ const DownloadProgressCard = ({
   const handleActionPress = () => {
     switch (status) {
       case DOWNLOAD_STATUS.QUEUED:
-        if (onCancel) onCancel(id);
-        break;
       case DOWNLOAD_STATUS.DOWNLOADING:
-        if (onPause) onPause(id);
-        break;
       case DOWNLOAD_STATUS.PAUSED:
-        if (onResume) onResume(id);
+        if (onCancel) onCancel(id);
         break;
       case DOWNLOAD_STATUS.FAILED:
         if (onRetry) onRetry(id);

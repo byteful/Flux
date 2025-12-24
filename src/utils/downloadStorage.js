@@ -7,7 +7,7 @@ const DOWNLOADS_INDEX_KEY = 'downloads_index';
 const DOWNLOAD_SETTINGS_KEY = 'download_settings';
 const DOWNLOAD_QUEUE_KEY = 'download_queue';
 
-const DOWNLOADS_DIR = `${FileSystem.documentDirectory}downloads/`;
+const DOWNLOADS_DIR = `${LegacyFileSystem.documentDirectory}downloads/`;
 const DOWNLOADS_BASE_DIR = new Directory(Paths.document, 'downloads');
 
 export const DEFAULT_DOWNLOAD_SETTINGS = {
@@ -43,7 +43,7 @@ export const getContentDirectory = (mediaType, tmdbId, season = null, episode = 
 
 export const ensureDirectoryExists = async (dirPath) => {
   try {
-    const pathParts = dirPath.replace(FileSystem.documentDirectory, '').split('/').filter(Boolean);
+    const pathParts = dirPath.replace(LegacyFileSystem.documentDirectory, '').split('/').filter(Boolean);
     let currentDir = new Directory(Paths.document);
     
     for (const part of pathParts) {

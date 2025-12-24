@@ -80,14 +80,6 @@ const DownloadsScreen = () => {
     setRefreshing(false);
   }, [loadData]);
 
-  const handlePause = async (downloadId) => {
-    await downloadManager.pauseDownload(downloadId);
-  };
-
-  const handleResume = async (downloadId) => {
-    await downloadManager.resumeDownload(downloadId);
-  };
-
   const handleCancel = async (downloadId) => {
     Alert.alert(
       'Cancel Download',
@@ -111,6 +103,13 @@ const DownloadsScreen = () => {
   };
 
   const handlePlay = (item) => {
+    const basePath = item.filePath.endsWith('.m3u8')
+      ? item.filePath
+      : `${item.filePath}video.m3u8`;
+    const offlinePath = basePath.startsWith('file://')
+      ? basePath
+      : `file://${basePath}`;
+
     navigation.navigate('VideoPlayer', {
       mediaId: item.tmdbId,
       mediaType: item.mediaType,
@@ -120,9 +119,7 @@ const DownloadsScreen = () => {
       episodeTitle: item.episodeTitle,
       poster_path: item.posterPath,
       isOffline: true,
-      offlineFilePath: item.filePath.endsWith('.m3u8')
-        ? item.filePath
-        : `${item.filePath}video.m3u8`,
+      offlineFilePath: offlinePath,
     });
   };
 
@@ -145,6 +142,9 @@ const DownloadsScreen = () => {
   };
 
   const getFilteredDownloads = () => {
+    if (selectedFilter === 'active') {
+      return [];
+    }
     if (selectedFilter === 'all') {
       return completedDownloads;
     }
@@ -153,6 +153,7 @@ const DownloadsScreen = () => {
 
   const filteredDownloads = getFilteredDownloads();
   const hasDownloads = activeDownloads.length > 0 || completedDownloads.length > 0;
+  const showActiveTab = activeDownloads.length >= 2;
   const storagePercentage = availableStorage > 0
     ? (storageUsed / (storageUsed + availableStorage)) * 100
     : 0;
@@ -187,15 +188,13 @@ const DownloadsScreen = () => {
             </View>
           )}
 
-          {activeDownloads.length > 0 && (
+          {activeDownloads.length > 0 && !showActiveTab && (
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Downloading</Text>
               {activeDownloads.map(item => (
                 <DownloadProgressCard
                   key={item.id}
                   item={item}
-                  onPause={handlePause}
-                  onResume={handleResume}
                   onCancel={handleCancel}
                   onRetry={handleRetry}
                 />
@@ -203,9 +202,19 @@ const DownloadsScreen = () => {
             </View>
           )}
 
-          {completedDownloads.length > 0 && (
+          {(completedDownloads.length > 0 || showActiveTab) && (
             <>
               <View style={styles.tabContainer}>
+                {showActiveTab && (
+                  <TouchableOpacity
+                    style={[styles.tab, selectedFilter === 'active' && styles.tabActive]}
+                    onPress={() => setSelectedFilter('active')}
+                  >
+                    <Text style={[styles.tabText, selectedFilter === 'active' && styles.tabTextActive]}>
+                      Active ({activeDownloads.length})
+                    </Text>
+                  </TouchableOpacity>
+                )}
                 <TouchableOpacity
                   style={[styles.tab, selectedFilter === 'all' && styles.tabActive]}
                   onPress={() => setSelectedFilter('all')}
@@ -232,18 +241,31 @@ const DownloadsScreen = () => {
                 </TouchableOpacity>
               </View>
 
-              <View style={styles.downloadedSection}>
-                <View style={styles.downloadedGrid}>
-                  {filteredDownloads.map(item => (
-                    <DownloadedMediaCard
+              {selectedFilter === 'active' ? (
+                <View style={styles.section}>
+                  {activeDownloads.map(item => (
+                    <DownloadProgressCard
                       key={item.id}
                       item={item}
-                      onPlay={handlePlay}
-                      onDelete={handleDelete}
+                      onCancel={handleCancel}
+                      onRetry={handleRetry}
                     />
                   ))}
                 </View>
-              </View>
+              ) : (
+                <View style={styles.downloadedSection}>
+                  <View style={styles.downloadedGrid}>
+                    {filteredDownloads.map(item => (
+                      <DownloadedMediaCard
+                        key={item.id}
+                        item={item}
+                        onPlay={handlePlay}
+                        onDelete={handleDelete}
+                      />
+                    ))}
+                  </View>
+                </View>
+              )}
             </>
           )}
 

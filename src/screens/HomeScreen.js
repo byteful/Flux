@@ -7,10 +7,12 @@ import {
   RefreshControl,
   Alert,
   Text,
+  TouchableOpacity,
 } from 'react-native';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import Animated, { useSharedValue, useAnimatedStyle, withTiming } from 'react-native-reanimated';
+import { Ionicons } from '@expo/vector-icons';
 import {
   fetchPopularMovies,
   fetchPopularTVShows,
@@ -25,6 +27,7 @@ import {
 } from '../api/tmdbApi';
 import { getContinueWatchingList, saveToContinueWatching, removeFromContinueWatching } from '../utils/storage';
 import { fetchLiveStreams, getSportDisplayName } from '../api/streameastApi';
+import networkMonitor from '../services/downloadManager/NetworkMonitor';
 import MediaRow from '../components/MediaRow';
 import SportRow from '../components/SportRow';
 import FeaturedContent from '../components/FeaturedContent';
@@ -50,7 +53,6 @@ const GENRES_TO_DISPLAY = {
 
 const HomeScreen = () => {
   const navigation = useNavigation();
-  // Removed trending state
   const [popularMovies, setPopularMovies] = useState([]);
   const [popularTVShows, setPopularTVShows] = useState([]);
   const [newReleaseMovies, setNewReleaseMovies] = useState([]);
@@ -64,7 +66,8 @@ const HomeScreen = () => {
   const [loading, setLoading] = useState(true);
   const [featuredContent, setFeaturedContent] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
-  const opacity = useSharedValue(0); // Animated value for opacity
+  const [isOffline, setIsOffline] = useState(false);
+  const opacity = useSharedValue(0);
   
   const animatedStyle = useAnimatedStyle(() => {
     return {
@@ -247,13 +250,18 @@ const HomeScreen = () => {
     const unsubscribe = navigation.addListener('focus', () => {
       getContinueWatchingList().then(data => {
         setContinueWatching(data);
-        // Optionally re-fetch recommendations here if needed, or rely on initial load/refresh
-        // Consider if fetching recommendations on every focus is too much
       });
     });
 
     return unsubscribe;
   }, [navigation]);
+
+  useEffect(() => {
+    const unsubscribe = networkMonitor.subscribe((state) => {
+      setIsOffline(!state.isConnected);
+    });
+    return () => unsubscribe();
+  }, []);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
@@ -362,6 +370,20 @@ const HomeScreen = () => {
         <View style={styles.header}>
           <Text style={styles.headerTitle}>Flux</Text>
         </View>
+
+        {isOffline && (
+          <TouchableOpacity
+            style={styles.offlineBanner}
+            onPress={() => navigation.navigate('Downloads')}
+          >
+            <Ionicons name="cloud-offline-outline" size={18} color="#fff" />
+            <Text style={styles.offlineBannerText}>
+              You're offline. Tap to view your downloads.
+            </Text>
+            <Ionicons name="chevron-forward" size={18} color="#fff" />
+          </TouchableOpacity>
+        )}
+
         <ScrollView
           showsVerticalScrollIndicator={false}
           refreshControl={
@@ -501,6 +523,22 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: '#000',
+  },
+  offlineBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#333',
+    paddingVertical: 12,
+    paddingHorizontal: 15,
+    marginHorizontal: 15,
+    marginBottom: 10,
+    borderRadius: 8,
+    gap: 10,
+  },
+  offlineBannerText: {
+    flex: 1,
+    color: '#fff',
+    fontSize: 14,
   },
 });
 

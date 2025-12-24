@@ -374,7 +374,6 @@ export const getStreamSourceOrder = async () => {
     // If the signature has changed, it means the default list was updated.
     // In this case, we reset the user's stored order to the new defaults.
     if (defaultSourceSignature !== storedSignature) {
-      console.log('[Storage] Default stream sources have changed. Resetting user order to new defaults.');
       await AsyncStorage.removeItem(STREAM_SOURCE_ORDER_KEY);
       await AsyncStorage.setItem(STREAM_SOURCE_SIGNATURE_KEY, defaultSourceSignature);
       // storedOrderJson remains null, so the logic below will use the new defaults.

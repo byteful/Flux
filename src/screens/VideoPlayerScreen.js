@@ -1366,7 +1366,10 @@ const VideoPlayerScreen = ({ route }) => {
         const isAutoPlayEnabled = await getAutoPlaySetting();
         if (isMounted) setAutoPlayEnabled(isAutoPlayEnabled);
 
-        setVideoUrl(offlineFilePath);
+        const normalizedPath = offlineFilePath.startsWith('file://')
+          ? offlineFilePath
+          : `file://${offlineFilePath}`;
+        setVideoUrl(normalizedPath);
         setCurrentPlayingSourceName('Offline');
         setStreamExtractionComplete(true);
 
