@@ -9,6 +9,7 @@ import HomeScreen from '../screens/HomeScreen';
 import VideoPlayerScreen from '../screens/VideoPlayerScreen';
 import DetailScreen from '../screens/DetailScreen';
 import SearchScreen from '../screens/SearchScreen';
+import DownloadsScreen from '../screens/DownloadsScreen';
 import SettingsScreen from '../screens/SettingsScreen';
 import SportStreamsScreen from '../screens/SportStreamsScreen';
 
@@ -94,18 +95,27 @@ const MainTabs = () => {
           ),
         }}
       />
-      <Tab.Screen 
-        name="Search" 
-        component={SearchScreen} 
+      <Tab.Screen
+        name="Search"
+        component={SearchScreen}
         options={{
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="search" color={color} size={size} />
           ),
         }}
       />
-      <Tab.Screen 
-        name="Settings" 
-        component={SettingsScreen} 
+      <Tab.Screen
+        name="Downloads"
+        component={DownloadsScreen}
+        options={{
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="download" color={color} size={size} />
+          ),
+        }}
+      />
+      <Tab.Screen
+        name="Settings"
+        component={SettingsScreen}
         options={{
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="settings" color={color} size={size} />

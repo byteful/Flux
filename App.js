@@ -4,6 +4,7 @@ import AppNavigator from './src/navigation/AppNavigator';
 import { StatusBar } from 'expo-status-bar';
 import { checkForUpdates, getCheckForUpdatesSetting } from './src/utils/updateChecker';
 import { initializeStreamSources } from './src/api/vidsrcApi'; // Import the initializer
+import downloadManager, { cleanupService } from './src/services/downloadManager';
 
 export default function App() {
   useEffect(() => {
@@ -14,6 +15,15 @@ export default function App() {
         console.log('[App.js] Stream sources initialized.');
       } catch (error) {
         console.error('[App.js] Failed to initialize stream sources:', error);
+      }
+
+      // Initialize download manager and cleanup service
+      try {
+        await downloadManager.initialize();
+        await cleanupService.initialize();
+        console.log('[App.js] Download services initialized.');
+      } catch (error) {
+        console.error('[App.js] Failed to initialize download services:', error);
       }
 
       // Check for updates

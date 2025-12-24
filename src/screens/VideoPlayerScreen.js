@@ -32,6 +32,8 @@ import { GestureHandlerRootView, GestureDetector, Gesture } from 'react-native-g
 import { runOnJS } from 'react-native-reanimated';
 import SubtitlesModal from '../components/SubtitlesModal';
 import { getLanguageName } from '../utils/languageUtils';
+import downloadManager from '../services/downloadManager';
+import { generateDownloadId } from '../utils/downloadStorage';
 
 // Constants for auto-play
 const VIDEO_END_THRESHOLD_SECONDS = 45; // Show button 45 secs before end
@@ -66,6 +68,8 @@ const VideoPlayerScreen = ({ route }) => {
     isLive,
     streameastUrl,
     sportToken,
+    isOffline,
+    offlineFilePath,
   } = route.params;
 
   const isFutureDate = (airDateString) => {
@@ -222,6 +226,11 @@ const VideoPlayerScreen = ({ route }) => {
   }, [setShowControls]);
 
   const getStreamHeaders = useCallback(() => {
+    // No headers needed for offline/local file playback
+    if (isOffline || (videoUrl && videoUrl.startsWith('file://'))) {
+      return {};
+    }
+
     const headers = {
       'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       'Accept': '*/*'
@@ -256,7 +265,7 @@ const VideoPlayerScreen = ({ route }) => {
     }
 
     return headers;
-  }, [streamReferer, videoUrl]); // Depend on streamReferer and videoUrl
+  }, [streamReferer, videoUrl, isOffline]); // Depend on streamReferer, videoUrl, and isOffline
 
   const player = useVideoPlayer({
     headers: getStreamHeaders(), // Will be updated when streamReferer changes
@@ -1351,6 +1360,22 @@ const VideoPlayerScreen = ({ route }) => {
         return;
       }
 
+      // Handle offline playback
+      if (isOffline && offlineFilePath) {
+        await checkSavedProgress();
+        const isAutoPlayEnabled = await getAutoPlaySetting();
+        if (isMounted) setAutoPlayEnabled(isAutoPlayEnabled);
+
+        setVideoUrl(offlineFilePath);
+        setCurrentPlayingSourceName('Offline');
+        setStreamExtractionComplete(true);
+
+        // Mark as watched for auto-delete tracking
+        const downloadId = generateDownloadId(mediaType, mediaId, season, episode);
+        downloadManager.markAsWatched(downloadId);
+        return;
+      }
+
       await checkSavedProgress();
 
       const isAutoPlayEnabled = await getAutoPlaySetting();
@@ -1417,7 +1442,7 @@ const VideoPlayerScreen = ({ route }) => {
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [navigation, contentId, mediaId, mediaType, season, episode, retryAttempts, player]);
+  }, [navigation, contentId, mediaId, mediaType, season, episode, retryAttempts, player, isOffline, offlineFilePath]);
   // --- End Main Setup Effect ---
 
   // --- Live Stream Error Handling ---

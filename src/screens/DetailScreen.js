@@ -17,6 +17,7 @@ import { fetchTVShowDetails, fetchSeasonDetails, fetchMovieDetails, getImageUrl,
 import { getShowWatchProgress, getEpisodeWatchProgress } from '../utils/storage'; // Import progress functions
 import { Ionicons } from '@expo/vector-icons';
 import MediaCard from '../components/MediaCard';
+import DownloadButton from '../components/DownloadButton';
 
 const DetailScreen = ({ route, navigation }) => {
   const { mediaId, mediaType, title } = route.params;
@@ -334,6 +335,19 @@ const DetailScreen = ({ route, navigation }) => {
               {item.overview || 'No description available.'}
             </Text>
           </View>
+          {!isUnreleased && (
+            <DownloadButton
+              variant="icon"
+              size="medium"
+              mediaId={mediaId}
+              mediaType="tv"
+              season={selectedSeason}
+              episode={item.episode_number}
+              title={details.name}
+              episodeTitle={item.name}
+              posterPath={details.poster_path}
+            />
+          )}
         </View>
       </TouchableOpacity>
     );
@@ -416,10 +430,19 @@ const DetailScreen = ({ route, navigation }) => {
             ) : null}
 
             {mediaType === 'movie' && (
-              <TouchableOpacity style={styles.playButton} onPress={handlePlayMovie}>
-                <Ionicons name="play" size={18} color="#000" />
-                <Text style={styles.playButtonText}>Play</Text>
-              </TouchableOpacity>
+              <View style={styles.movieButtonsRow}>
+                <TouchableOpacity style={styles.playButton} onPress={handlePlayMovie}>
+                  <Ionicons name="play" size={18} color="#000" />
+                  <Text style={styles.playButtonText}>Play</Text>
+                </TouchableOpacity>
+                <DownloadButton
+                  variant="button"
+                  mediaId={mediaId}
+                  mediaType="movie"
+                  title={details.title || title}
+                  posterPath={details.poster_path}
+                />
+              </View>
             )}
           </View>
         </View>
@@ -510,10 +533,22 @@ const DetailScreen = ({ route, navigation }) => {
                   {/* episodesToShow is already filtered and sliced */}
                   {episodesToShow.length > 0 ? (
                     <>
-                      <Text style={styles.sectionTitle}>
-                        Season {selectedSeason} • {totalEpisodesInSeason}{' '}
-                        {totalEpisodesInSeason === 1 ? 'Episode' : 'Episodes'}
-                      </Text>
+                      <View style={styles.seasonHeaderRow}>
+                        <Text style={styles.seasonTitle}>
+                          Season {selectedSeason} • {totalEpisodesInSeason}{' '}
+                          {totalEpisodesInSeason === 1 ? 'Episode' : 'Episodes'}
+                        </Text>
+                        <DownloadButton
+                          variant="compact"
+                          isSeasonDownload={true}
+                          mediaId={mediaId}
+                          mediaType="tv"
+                          seasonNumber={selectedSeason}
+                          episodes={allEpisodesInSeason}
+                          title={details.name}
+                          posterPath={details.poster_path}
+                        />
+                      </View>
                       <FlatList
                         ref={flatListRef}
                         data={episodesToShow}
@@ -755,6 +790,23 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: 'bold',
     marginLeft: 8, // Space icon and text
+  },
+  movieButtonsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  seasonHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 15,
+    marginBottom: 20,
+  },
+  seasonTitle: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: 'bold',
   },
   seasonsContainer: {
     // paddingHorizontal: 15, // Horizontal padding will be on the inner ScrollView content

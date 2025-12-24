@@ -26,6 +26,15 @@ import {
   saveStreamSourceOrder, // New import
   getStreamSourceOrder,  // New import
 } from '../utils/storage';
+import {
+  getDownloadSettings,
+  saveDownloadSettings,
+  getDownloadStorageUsage,
+  clearAllDownloads,
+  formatFileSize,
+  getAllDownloads,
+} from '../utils/downloadStorage';
+import downloadManager from '../services/downloadManager';
 import { DEFAULT_STREAM_SOURCES as apiDefaultSources, initializeStreamSources as refreshApiSources } from '../api/vidsrcApi'; // Import available sources and initializer
 import { getCheckForUpdatesSetting, setCheckForUpdatesSetting, checkForUpdates as performUpdateCheck } from '../utils/updateChecker';
 import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist'; // New import
@@ -47,6 +56,13 @@ const SettingsScreen = () => {
   const [originalStreamSources, setOriginalStreamSources] = useState([]); // To track original order for changes
   const [sourceOrderChanged, setSourceOrderChanged] = useState(false); // Track if order has changed
   const [isSavingOrder, setIsSavingOrder] = useState(false); // State for save button loader
+
+  // Download settings state
+  const [wifiOnlyDownload, setWifiOnlyDownload] = useState(true);
+  const [autoDeleteWatched, setAutoDeleteWatched] = useState(false);
+  const [autoDeleteUnwatchedDays, setAutoDeleteUnwatchedDays] = useState(14);
+  const [downloadStorageUsed, setDownloadStorageUsed] = useState(0);
+  const [totalDownloadsCount, setTotalDownloadsCount] = useState(0);
 
   // Animated style
   const animatedStyle = useAnimatedStyle(() => {
@@ -126,6 +142,19 @@ const SettingsScreen = () => {
         setOriginalStreamSources([...sources.map(s => ({...s}))]); // Use deep copy for original state
         setSourceOrderChanged(false); // Reset changed state
 
+        // Load download settings
+        const downloadSettings = await getDownloadSettings();
+        setWifiOnlyDownload(downloadSettings.wifiOnlyDownload);
+        setAutoDeleteWatched(downloadSettings.autoDeleteWatchedDays > 0);
+        setAutoDeleteUnwatchedDays(downloadSettings.autoDeleteUnwatchedDays);
+
+        // Load download storage usage
+        const downloadUsage = await getDownloadStorageUsage();
+        setDownloadStorageUsed(downloadUsage);
+
+        // Load total downloads count
+        const allDownloads = await getAllDownloads();
+        setTotalDownloadsCount(allDownloads.length);
 
       } catch (error) {
         console.error('Error loading settings or calculating storage:', error);
@@ -350,12 +379,78 @@ const SettingsScreen = () => {
     await performUpdateCheck(true); // true to always show alert with result
   };
 
+  // Download Settings Handlers
+  const handleWifiOnlyToggle = async (value) => {
+    setWifiOnlyDownload(value);
+    const success = await saveDownloadSettings({ wifiOnlyDownload: value });
+    if (!success) {
+      setWifiOnlyDownload(!value);
+      Alert.alert('Error', 'Could not save download setting.');
+    }
+  };
+
+  const handleAutoDeleteWatchedToggle = async (value) => {
+    setAutoDeleteWatched(value);
+    const autoDeleteWatchedDays = value ? 1 : 0;
+    const success = await saveDownloadSettings({ autoDeleteWatchedDays });
+    if (!success) {
+      setAutoDeleteWatched(!value);
+      Alert.alert('Error', 'Could not save download setting.');
+    }
+  };
+
+  const handleAutoDeleteUnwatchedChange = async (days) => {
+    setAutoDeleteUnwatchedDays(days);
+    const success = await saveDownloadSettings({ autoDeleteUnwatchedDays: days });
+    if (!success) {
+      Alert.alert('Error', 'Could not save download setting.');
+    }
+  };
+
+  const handleClearAllDownloads = () => {
+    if (totalDownloadsCount === 0) {
+      Alert.alert('No Downloads', 'There are no downloads to clear.');
+      return;
+    }
+    Alert.alert(
+      'Clear All Downloads',
+      `Are you sure you want to delete all ${totalDownloadsCount} downloads? This will free up ${formatFileSize(downloadStorageUsed)}.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete All',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await downloadManager.cancelAllDownloads();
+              await clearAllDownloads();
+              setDownloadStorageUsed(0);
+              setTotalDownloadsCount(0);
+              Alert.alert('Success', 'All downloads have been cleared.');
+            } catch (error) {
+              console.error('Error clearing downloads:', error);
+              Alert.alert('Error', 'Could not clear downloads.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const refreshDownloadData = async () => {
+    const downloadUsage = await getDownloadStorageUsage();
+    setDownloadStorageUsed(downloadUsage);
+    const allDownloads = await getAllDownloads();
+    setTotalDownloadsCount(allDownloads.length);
+  };
+
   useFocusEffect(
     useCallback(() => {
       opacity.value = 0; // Reset
       opacity.value = withTiming(1, { duration: 300 }); // Fade in
       refreshStorageData(); // Refresh data when screen comes into focus
       loadStreamSources(); // Also refresh stream sources on focus
+      refreshDownloadData(); // Refresh download data on focus
       return () => {
         // Optional: any cleanup when screen loses focus
       };
@@ -452,6 +547,86 @@ const SettingsScreen = () => {
                 </TouchableOpacity>
               </View>
             )}
+          </View>
+
+          {/* Downloads Section */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Downloads</Text>
+
+            {/* WiFi-only toggle */}
+            <View style={styles.setting}>
+              <View style={styles.settingInfo}>
+                <Ionicons name="wifi" size={22} color="#888" style={styles.settingIcon} />
+                <Text style={styles.settingTitle}>WiFi-Only Downloads</Text>
+              </View>
+              <Switch
+                value={wifiOnlyDownload}
+                onValueChange={handleWifiOnlyToggle}
+                trackColor={{ false: '#444', true: '#E50914' }}
+                thumbColor="#fff"
+              />
+            </View>
+
+            {/* Delete after watching toggle */}
+            <View style={styles.setting}>
+              <View style={styles.settingInfo}>
+                <Ionicons name="trash-outline" size={22} color="#888" style={styles.settingIcon} />
+                <Text style={styles.settingTitle}>Delete After Watching</Text>
+              </View>
+              <Switch
+                value={autoDeleteWatched}
+                onValueChange={handleAutoDeleteWatchedToggle}
+                trackColor={{ false: '#444', true: '#E50914' }}
+                thumbColor="#fff"
+              />
+            </View>
+
+            {/* Auto-delete unwatched selector */}
+            <View style={styles.dataInfo}>
+              <Ionicons name="timer-outline" size={22} color="#888" style={styles.settingIcon} />
+              <View style={styles.watchHistoryContainer}>
+                <Text style={styles.settingTitle}>Auto-Delete Unwatched</Text>
+                <Text style={styles.watchHistoryCount}>
+                  {autoDeleteUnwatchedDays === 0 ? 'Never' : `After ${autoDeleteUnwatchedDays} days`}
+                </Text>
+              </View>
+            </View>
+            <View style={styles.autoDeleteOptionsRow}>
+              {[0, 7, 14, 30].map((days) => (
+                <TouchableOpacity
+                  key={days}
+                  style={[
+                    styles.autoDeleteOption,
+                    autoDeleteUnwatchedDays === days && styles.autoDeleteOptionActive,
+                  ]}
+                  onPress={() => handleAutoDeleteUnwatchedChange(days)}
+                >
+                  <Text
+                    style={[
+                      styles.autoDeleteOptionText,
+                      autoDeleteUnwatchedDays === days && styles.autoDeleteOptionTextActive,
+                    ]}
+                  >
+                    {days === 0 ? 'Never' : `${days}d`}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            {/* Download storage info */}
+            <View style={[styles.dataInfo, { marginTop: 10 }]}>
+              <Ionicons name="folder-outline" size={22} color="#888" style={styles.settingIcon} />
+              <View style={styles.watchHistoryContainer}>
+                <Text style={styles.settingTitle}>Downloaded Content</Text>
+                <Text style={styles.watchHistoryCount}>
+                  {totalDownloadsCount} {totalDownloadsCount === 1 ? 'item' : 'items'} • {formatFileSize(downloadStorageUsed)}
+                </Text>
+              </View>
+            </View>
+
+            <TouchableOpacity style={styles.button} onPress={handleClearAllDownloads}>
+              <Text style={styles.buttonText}>Clear All Downloads</Text>
+            </TouchableOpacity>
           </View>
 
           <View style={styles.section}>
@@ -671,6 +846,36 @@ const styles = StyleSheet.create({
   infoValue: {
     color: '#fff',
     fontSize: 16,
+  },
+  // Download settings styles
+  autoDeleteOptionsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 8,
+    marginBottom: 5,
+  },
+  autoDeleteOption: {
+    flex: 1,
+    backgroundColor: '#222',
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    marginHorizontal: 4,
+    borderRadius: 6,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#333',
+  },
+  autoDeleteOptionActive: {
+    backgroundColor: '#E50914',
+    borderColor: '#E50914',
+  },
+  autoDeleteOptionText: {
+    color: '#aaa',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  autoDeleteOptionTextActive: {
+    color: '#fff',
   },
 });
 
