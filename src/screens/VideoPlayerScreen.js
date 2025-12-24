@@ -4,7 +4,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import * as Brightness from 'expo-brightness';
-import Slider from '@react-native-community/slider';
 import { VideoView, useVideoPlayer, VideoAirPlayButton } from 'expo-video';
 import { WebView } from 'react-native-webview';
 import { fetchTVShowDetails, fetchSeasonDetails } from '../api/tmdbApi';
@@ -30,7 +29,7 @@ import { useEventListener } from 'expo';
 import parseSrt from 'parse-srt';
 import { searchSubtitles, downloadSubtitle } from '../api/opensubtitlesApi';
 import { GestureHandlerRootView, GestureDetector, Gesture } from 'react-native-gesture-handler';
-import { runOnJS } from 'react-native-worklets';
+import { runOnJS } from 'react-native-reanimated';
 import SubtitlesModal from '../components/SubtitlesModal';
 import { getLanguageName } from '../utils/languageUtils';
 
@@ -96,6 +95,9 @@ const VideoPlayerScreen = ({ route }) => {
   const rightArrowTranslate = useRef(new Animated.Value(0)).current;
   const leftSeekTimeoutRef = useRef(null);
   const rightSeekTimeoutRef = useRef(null);
+  const pendingSeekAmount = useRef(0);
+  const seekDebounceTimeout = useRef(null);
+  const wasPlayingBeforeDoubleTapSeek = useRef(false);
   // --- End Double Tap Seek States ---
 
   // ... existing states ...
@@ -121,6 +123,8 @@ const VideoPlayerScreen = ({ route }) => {
   const [hasBrightnessPermission, setHasBrightnessPermission] = useState(false);
   const [isSeeking, setIsSeeking] = useState(false);
   const [seekPreviewPosition, setSeekPreviewPosition] = useState(null);
+  const [seekPreviewXPosition, setSeekPreviewXPosition] = useState(0);
+  const wasPlayingBeforeSeek = useRef(false);
   const [manualWebViewVisible, setManualWebViewVisible] = useState(false); // For CAPTCHA
   const [captchaUrl, setCaptchaUrl] = useState(null); // To store URL for visible WebView
   const [isChangingSource, setIsChangingSource] = useState(false); // True when a source change attempt (via modal) is active
@@ -293,9 +297,12 @@ const VideoPlayerScreen = ({ route }) => {
 
     // Set new timer using ref
     controlsTimerRef.current = setTimeout(() => {
-      setShowControls(false);
+      // Don't hide controls if actively seeking
+      if (!isSeeking) {
+        setShowControls(false);
+      }
     }, 5000);
-  }, [setShowControls]); // Only depend on stable setter again
+  }, [setShowControls, isSeeking]); // Add isSeeking to dependencies
   useEffect(() => {
     if (showControls) {
       Animated.timing(opacityAnim, {
@@ -328,9 +335,9 @@ const VideoPlayerScreen = ({ route }) => {
     };
   }, [showControls, opacityAnim, startControlsTimer]);
 
-  const toggleControls = () => {
+  const toggleControls = useCallback(() => {
     setShowControls(currentShowControls => !currentShowControls);
-  };
+  }, []);
 
 
   // --- Brightness Handling ---
@@ -1027,7 +1034,7 @@ const VideoPlayerScreen = ({ route }) => {
       bufferingTimeoutRef.current = setTimeout(() => {
         // Check if player exists AND alert is not already visible
         if (player && !showBufferingAlert) {
-          runOnJS(setShowBufferingAlert)(true);
+          setShowBufferingAlert(true);
         }
       }, BUFFER_TIMEOUT * 1000);
     };
@@ -1187,21 +1194,18 @@ const VideoPlayerScreen = ({ route }) => {
   useEffect(() => {
     let isMounted = true;
     setIsUnmounting(false);
-
-
-    // Reset subtitle states for new media
-    // setAvailableLanguages({});
-    // setSelectedLanguage(null);
-    // setParsedSubtitles([]);
-    // setCurrentSubtitleText('');
-    // // initialSubtitlePreferenceAppliedRef is reset in initializePlayer
-    const setOrientationAndHideUI = async () => {
+    
+    const setOrientationToLandscape = async () => {
+      await new Promise(resolve => setTimeout(resolve, 300));
+      if (!isMounted) return;
       try {
         await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
       } catch (e) {
-        console.error("Failed to set orientation or hide UI:", e);
+        console.error("Failed to lock orientation to landscape:", e);
       }
     };
+    
+    setOrientationToLandscape();
 
     const checkSavedProgress = async () => {
       if (isLive) {
@@ -1342,13 +1346,12 @@ const VideoPlayerScreen = ({ route }) => {
           setCurrentSourceAttemptKey(key);
           setManualWebViewVisible(false); // Hide manual view if a new attempt starts
           setCaptchaUrl(null);
-        }
+        },
+        title
       );
     };
 
     const initializePlayer = async () => {
-      await setOrientationAndHideUI();
-
       if (isLive) {
         setIsLiveStream(true);
         if (isMounted) {
@@ -1418,6 +1421,9 @@ const VideoPlayerScreen = ({ route }) => {
           clearTimeout(rightSeekTimeoutRef.current);
           rightSeekTimeoutRef.current = null;
         }
+        
+        ScreenOrientation.unlockAsync()
+          .catch(e => console.error("Failed to unlock orientation in cleanup:", e));
       } catch (e) {
         console.error("Cleanup error:", e);
       }
@@ -1570,7 +1576,8 @@ const VideoPlayerScreen = ({ route }) => {
       onStreamFound,
       onSourceErrorCallback, // Use the renamed callback
       onManualInterventionRequired,
-      provideWebViewConfigForAttempt
+      provideWebViewConfigForAttempt,
+      title
     );
   };
   // --- End Source Selection Modal Logic ---
@@ -1690,13 +1697,12 @@ const VideoPlayerScreen = ({ route }) => {
       if (player) {
         player.pause();
       }
-      ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP)
+      ScreenOrientation.unlockAsync()
         .catch(() => { })
         .finally(() => {
           const navRef = navigationRef.current;
           if (!navRef) return;
 
-          // Use a slight delay to allow orientation change to settle
           setTimeout(() => {
             try {
               if (isLiveStream) {
@@ -1706,14 +1712,12 @@ const VideoPlayerScreen = ({ route }) => {
               }
             } catch (e) {
               console.error("Navigation error:", e);
-              // Fallback navigation if goBack fails unexpectedly
               try { navRef.replace('MainTabs'); } catch (e2) { }
             }
-          }, 300);
+          }, 100);
         });
     } catch (e) {
       console.error("Error in handleGoBack:", e);
-      // Fallback navigation if main try block fails
       const navRef = navigationRef.current;
       if (!navRef) return;
       try { navRef.navigate('MainTabs'); } catch (e2) { }
@@ -1750,17 +1754,24 @@ const VideoPlayerScreen = ({ route }) => {
   // --- End Navigation ---
 
   // --- Time Formatting ---
-  const formatTime = (timeInSeconds) => {
-    if (isNaN(timeInSeconds) || timeInSeconds < 0) return '00:00';
-    const hours = Math.floor(timeInSeconds / 3600);
-    const minutes = Math.floor((timeInSeconds % 3600) / 60);
-    const seconds = Math.floor(timeInSeconds % 60);
+  const formatTime = (timeInSeconds, allowNegative = false) => {
+    if (isNaN(timeInSeconds)) return '00:00';
+    
+    const isNegative = timeInSeconds < 0;
+    const absTime = Math.abs(timeInSeconds);
+    
+    const hours = Math.floor(absTime / 3600);
+    const minutes = Math.floor((absTime % 3600) / 60);
+    const seconds = Math.floor(absTime % 60);
     const formattedHours = String(hours).padStart(2, '0');
     const formattedMinutes = String(minutes).padStart(2, '0');
     const formattedSeconds = String(seconds).padStart(2, '0');
-    return hours > 0
+    
+    const timeString = hours > 0
       ? `${formattedHours}:${formattedMinutes}:${formattedSeconds}`
       : `${formattedMinutes}:${formattedSeconds}`;
+    
+    return (isNegative && allowNegative) ? `${timeString}` : timeString;
   };
 
   const formatRuntime = (minutes) => {
@@ -1775,61 +1786,124 @@ const VideoPlayerScreen = ({ route }) => {
   // --- End Time Formatting ---
 
   // --- Seek Handling ---
+  const seekGestureStartedRef = useRef(false);
+  
   const updateSeekPreview = (nativeEvent) => {
-    // ... (keep existing seek preview logic) ...
     if (!duration || !progressBarRef.current) return;
     progressBarRef.current.measure((x, y, width, height, pageX, pageY) => {
       let calculatedPosition = (nativeEvent.locationX / width) * duration;
       calculatedPosition = Math.max(0, Math.min(calculatedPosition, duration));
       if (!isNaN(calculatedPosition)) {
         setSeekPreviewPosition(calculatedPosition);
+        setSeekPreviewXPosition(pageX + nativeEvent.locationX);
       }
     });
   };
 
   const progressPanResponder = PanResponder.create({
-    onStartShouldSetPanResponder: () => true,
-    onMoveShouldSetPanResponder: () => true,
+    onStartShouldSetPanResponder: () => false,
+    onStartShouldSetPanResponderCapture: () => false,
+    onMoveShouldSetPanResponder: (evt, gestureState) => {
+      return Math.abs(gestureState.dx) > 3 || Math.abs(gestureState.dy) > 3;
+    },
+    onMoveShouldSetPanResponderCapture: (evt, gestureState) => {
+      return Math.abs(gestureState.dx) > 3 || Math.abs(gestureState.dy) > 3;
+    },
     onPanResponderGrant: (evt) => {
+      seekGestureStartedRef.current = true;
       setIsSeeking(true);
+      wasPlayingBeforeSeek.current = isPlaying;
       if (player && isPlaying) {
         player.pause();
       }
       updateSeekPreview(evt.nativeEvent);
       setShowControls(true);
     },
-    onPanResponderMove: (evt) => {
+    onPanResponderMove: (evt, gestureState) => {
       updateSeekPreview(evt.nativeEvent);
       setShowControls(true);
     },
     onPanResponderRelease: (evt, gestureState) => {
-      const seekTarget = seekPreviewPosition; // Capture value before resetting
-      setIsSeeking(false);
-      setSeekPreviewPosition(null); // Reset preview immediately
+      const hasMoved = seekGestureStartedRef.current;
+      const seekTarget = seekPreviewPosition;
+      seekGestureStartedRef.current = false;
+      setSeekPreviewPosition(null);
+      setSeekPreviewXPosition(0);
 
-      if (player && seekTarget !== null) {
+      if (player && seekTarget !== null && hasMoved) {
         try {
           player.currentTime = seekTarget;
-          // Manually update refs after seek to prevent false trigger
+          setPosition(seekTarget);
           lastPositionRef.current = seekTarget;
           lastPositionTimeRef.current = Date.now();
-          // Reset manual trigger if seeking away from end
+          
           if (duration > 0 && seekTarget < duration - 5) {
             manualFinishTriggeredRef.current = false;
           }
-
+          
+          if (player && wasPlayingBeforeSeek.current) {
+            player.play();
+          }
+          
+          setTimeout(() => {
+            setIsSeeking(false);
+          }, 100);
         } catch (e) {
           console.error('Error seeking player on release:', e);
+          setIsSeeking(false);
         }
+      } else {
+        setIsSeeking(false);
       }
-      // Resume playback ONLY if it was playing before grant
-      if (player && isPlaying) { // Check original isPlaying state before grant
-        player.play();
-      }
-      setShowControls(true); // Reset controls timer
-    }
+      
+      setShowControls(true);
+    },
+    onPanResponderTerminate: (evt, gestureState) => {
+      seekGestureStartedRef.current = false;
+      setIsSeeking(false);
+      setSeekPreviewPosition(null);
+      setSeekPreviewXPosition(0);
+    },
+    onPanResponderTerminationRequest: () => false,
+    onShouldBlockNativeResponder: () => false,
   });
   // --- End Seek Handling ---
+
+  // --- Brightness Slider Pan Responder ---
+  const brightnessSliderRef = useRef(null);
+  
+  const brightnessPanResponder = PanResponder.create({
+    onStartShouldSetPanResponder: () => false,
+    onStartShouldSetPanResponderCapture: () => false,
+    onMoveShouldSetPanResponder: (evt, gestureState) => {
+      return Math.abs(gestureState.dx) > 3 || Math.abs(gestureState.dy) > 3;
+    },
+    onMoveShouldSetPanResponderCapture: (evt, gestureState) => {
+      return Math.abs(gestureState.dx) > 3 || Math.abs(gestureState.dy) > 3;
+    },
+    onPanResponderGrant: (evt) => {
+      if (!brightnessSliderRef.current || !hasBrightnessPermission) return;
+      brightnessSliderRef.current.measure((x, y, width, height, pageX, pageY) => {
+        const touchY = evt.nativeEvent.pageY - pageY;
+        const newValue = 1 - Math.max(0, Math.min(1, touchY / height));
+        handleBrightnessChange(newValue);
+      });
+      setShowControls(true);
+    },
+    onPanResponderMove: (evt) => {
+      if (!brightnessSliderRef.current || !hasBrightnessPermission) return;
+      brightnessSliderRef.current.measure((x, y, width, height, pageX, pageY) => {
+        const touchY = evt.nativeEvent.pageY - pageY;
+        const newValue = 1 - Math.max(0, Math.min(1, touchY / height));
+        handleBrightnessChange(newValue);
+      });
+      setShowControls(true);
+    },
+    onPanResponderRelease: () => {
+      setShowControls(true);
+    }
+  });
+  // --- End Brightness Slider Pan Responder ---
 
   const injectedJavaScript = `
     (function() { window.alert = function() {}; })();
@@ -1844,60 +1918,39 @@ const VideoPlayerScreen = ({ route }) => {
   }, [screenDimensions]);
 
   useEffect(() => {
-    if (!videoNaturalSize || !screenDimensions) {
-      if (!isZoomed) { // Ensure scale is 1 if not zoomed and info is missing
-        Animated.timing(animatedScale, {
-          toValue: 1,
-          duration: 300,
-          easing: Easing.out(Easing.ease),
-          useNativeDriver: true,
-        }).start();
-      }
-      return;
-    }
-
-    const { width: videoWidth, height: videoHeight } = videoNaturalSize;
-    const { width: screenWidth, height: screenHeight } = screenDimensions;
-
-    let targetScaleValue = 1;
-    if (isZoomed) {
-      if (videoWidth > 0 && videoHeight > 0 && screenWidth > 0 && screenHeight > 0) {
-        const videoAspectRatio = videoWidth / videoHeight;
-        const screenAspectRatio = screenWidth / screenHeight;
-
-        // If aspect ratios are very similar, effectively no zoom needed for "fill"
-        if (Math.abs(videoAspectRatio - screenAspectRatio) < 0.01) {
-          targetScaleValue = 1;
-        } else if (videoAspectRatio > screenAspectRatio) { // Video is wider than screen container
-          targetScaleValue = (screenHeight / screenWidth) * videoAspectRatio;
-        } else { // Video is narrower or same aspect ratio
-          targetScaleValue = (screenWidth / screenHeight) / videoAspectRatio;
-        }
-        targetScaleValue = Math.max(1, targetScaleValue); // Ensure scale is at least 1
-      } else {
-        targetScaleValue = 1.5; // Fallback zoom scale
-      }
-    }
-
+    const targetScaleValue = 1.0;
+    
     Animated.timing(animatedScale, {
       toValue: targetScaleValue,
       duration: 300,
       easing: Easing.out(Easing.ease),
       useNativeDriver: true,
     }).start();
-  }, [isZoomed, videoNaturalSize, screenDimensions, animatedScale]);
+  }, [isZoomed, animatedScale]);
 
   // --- Double Tap Seek Functions ---
   const handleDoubleTapLeft = useCallback(() => {
     if (player && !isLiveStream) {
       let seekAmount = leftSeekAmount <= -60 ? -30 : -10;
-      player.seekBy(seekAmount);
+      
+      const newPendingAmount = Math.max(pendingSeekAmount.current + seekAmount, -300);
+      pendingSeekAmount.current = newPendingAmount;
 
       if (leftSeekTimeoutRef.current) {
         clearTimeout(leftSeekTimeoutRef.current);
       }
+      if (seekDebounceTimeout.current) {
+        clearTimeout(seekDebounceTimeout.current);
+      }
 
-      setLeftSeekAmount(prev => prev + seekAmount);
+      if (pendingSeekAmount.current === seekAmount) {
+        wasPlayingBeforeDoubleTapSeek.current = isPlaying;
+        if (isPlaying) {
+          player.pause();
+        }
+      }
+
+      setLeftSeekAmount(prev => Math.max(prev + seekAmount, -300));
 
       leftArrowTranslate.setValue(0);
 
@@ -1914,6 +1967,15 @@ const VideoPlayerScreen = ({ route }) => {
         })
       ]).start();
 
+      seekDebounceTimeout.current = setTimeout(() => {
+        player.seekBy(pendingSeekAmount.current);
+        pendingSeekAmount.current = 0;
+        
+        if (wasPlayingBeforeDoubleTapSeek.current) {
+          player.play();
+        }
+      }, 500);
+
       leftSeekTimeoutRef.current = setTimeout(() => {
         Animated.timing(leftSeekOpacity, {
           toValue: 0,
@@ -1923,20 +1985,32 @@ const VideoPlayerScreen = ({ route }) => {
           setLeftSeekAmount(0);
           leftArrowTranslate.setValue(0);
         });
-      }, 800);
+      }, 1000);
     }
-  }, [player, isLiveStream, leftSeekOpacity, leftArrowTranslate, leftSeekAmount]);
+  }, [player, isLiveStream, leftSeekOpacity, leftArrowTranslate, leftSeekAmount, isPlaying]);
 
   const handleDoubleTapRight = useCallback(() => {
     if (player && !isLiveStream) {
       let seekAmount = rightSeekAmount >= 60 ? 30 : 10;
-      player.seekBy(seekAmount);
+      
+      const newPendingAmount = Math.min(pendingSeekAmount.current + seekAmount, 300);
+      pendingSeekAmount.current = newPendingAmount;
 
       if (rightSeekTimeoutRef.current) {
         clearTimeout(rightSeekTimeoutRef.current);
       }
+      if (seekDebounceTimeout.current) {
+        clearTimeout(seekDebounceTimeout.current);
+      }
 
-      setRightSeekAmount(prev => prev + seekAmount);
+      if (pendingSeekAmount.current === seekAmount) {
+        wasPlayingBeforeDoubleTapSeek.current = isPlaying;
+        if (isPlaying) {
+          player.pause();
+        }
+      }
+
+      setRightSeekAmount(prev => Math.min(prev + seekAmount, 300));
 
       rightArrowTranslate.setValue(0);
 
@@ -1953,6 +2027,15 @@ const VideoPlayerScreen = ({ route }) => {
         })
       ]).start();
 
+      seekDebounceTimeout.current = setTimeout(() => {
+        player.seekBy(pendingSeekAmount.current);
+        pendingSeekAmount.current = 0;
+        
+        if (wasPlayingBeforeDoubleTapSeek.current) {
+          player.play();
+        }
+      }, 500);
+
       rightSeekTimeoutRef.current = setTimeout(() => {
         Animated.timing(rightSeekOpacity, {
           toValue: 0,
@@ -1962,9 +2045,9 @@ const VideoPlayerScreen = ({ route }) => {
           setRightSeekAmount(0);
           rightArrowTranslate.setValue(0);
         });
-      }, 800);
+      }, 1000);
     }
-  }, [player, isLiveStream, rightSeekOpacity, rightArrowTranslate, rightSeekAmount]);
+  }, [player, isLiveStream, rightSeekOpacity, rightArrowTranslate, rightSeekAmount, isPlaying]);
   // --- End Double Tap Seek Functions ---
 
   // --- Combined Gestures for Tap and Pinch ---
@@ -1973,12 +2056,20 @@ const VideoPlayerScreen = ({ route }) => {
     .maxDuration(250)
     .maxDistance(100)
     .onEnd((event, success) => {
+      'worklet';
       if (success) {
-        if (event.x < screenDimensions.width / 2) {
+        const screenWidth = screenDimensions.width;
+        const tapX = event.x;
+        
+        // Left zone: first 30% of screen
+        if (tapX < screenWidth * 0.3) {
           runOnJS(handleDoubleTapLeft)();
-        } else {
+        } 
+        // Right zone: last 30% of screen
+        else if (tapX > screenWidth * 0.7) {
           runOnJS(handleDoubleTapRight)();
         }
+        // Middle zone (30%-70%): do nothing, just toggle controls
       }
     }), [handleDoubleTapLeft, handleDoubleTapRight, screenDimensions.width]);
 
@@ -1986,33 +2077,40 @@ const VideoPlayerScreen = ({ route }) => {
     .numberOfTaps(1)
     .maxDuration(250)
     .onEnd((_event, success) => {
+      'worklet';
       if (success) {
         runOnJS(toggleControls)();
       }
     }), [toggleControls]);
 
+  const pinchScale = useRef(1);
+  
   const pinchToZoom = useMemo(() => Gesture.Pinch()
-    .onEnd((event) => {
-      if (event.scale > 1.1) {
-        if (!isZoomed) {
-          setIsZoomed(true);
-        }
-      } else if (event.scale < 0.9) {
-        if (isZoomed) {
-          setIsZoomed(false);
-        }
+    .onStart(() => {
+      'worklet';
+      pinchScale.current = 1;
+    })
+    .onUpdate((event) => {
+      'worklet';
+      pinchScale.current = event.scale;
+    })
+    .onEnd(() => {
+      'worklet';
+      const finalScale = pinchScale.current;
+      
+      if (finalScale > 1.1) {
+        runOnJS(setIsZoomed)(true);
+      } else if (finalScale < 0.9) {
+        runOnJS(setIsZoomed)(false);
       }
-      if (!showControls) {
-        setShowControls(true);
-      } else {
-        startControlsTimer();
-      }
-    }), [isZoomed, showControls, startControlsTimer]);
+      
+      runOnJS(startControlsTimer)();
+      pinchScale.current = 1;
+    }), [startControlsTimer]);
 
-  const videoAreaGestures = useMemo(() => Gesture.Race(
-    pinchToZoom,
-    Gesture.Exclusive(doubleTapSeek, tapToToggleControls)
-  ), [pinchToZoom, doubleTapSeek, tapToToggleControls]);
+  const videoAreaGestures = useMemo(() => 
+    Gesture.Exclusive(pinchToZoom, doubleTapSeek, tapToToggleControls), 
+  [pinchToZoom, doubleTapSeek, tapToToggleControls]);
   // --- End Pinch to Zoom Logic ---
 
   // --- Memoized Subtitle Rendering ---
@@ -2431,8 +2529,8 @@ const VideoPlayerScreen = ({ route }) => {
                 allowsPictureInPicture={true}
                 allowsVideoFrameAnalysis={false}
                 startsPictureInPictureAutomatically={true}
-                resizeMode="contain" // Base resize mode is contain
-              // pointerEvents="none" // Prevent VideoView from interfering with gestures on parent Animated.View
+                contentFit={isZoomed ? "cover" : "contain"} // Change content fit when zoomed
+                pointerEvents="none" // Prevent VideoView from interfering with gestures on parent Animated.View
               />
             </Animated.View>
           </GestureDetector>
@@ -2548,20 +2646,20 @@ const VideoPlayerScreen = ({ route }) => {
             {/* Brightness Slider */}
             {hasBrightnessPermission && (
               <View style={styles.brightnessSliderContainer}>
-                {/* ... brightness slider elements ... */}
                 <Ionicons name="sunny" size={20} color="white" style={styles.brightnessIcon} />
-                <Slider
-                  style={styles.brightnessSlider}
-                  minimumValue={0} maximumValue={1} value={brightnessLevel}
-                  onValueChange={handleBrightnessChange}
-                  minimumTrackTintColor="#FFFFFF" maximumTrackTintColor="rgba(255, 255, 255, 0.3)"
-                  thumbTintColor="transparent"
-                  tapToSeek
-                />
+                <View 
+                  ref={brightnessSliderRef}
+                  style={styles.customBrightnessSliderWrapper}
+                  {...(showControls ? brightnessPanResponder.panHandlers : {})}
+                >
+                  <View style={styles.customBrightnessTrack}>
+                    <View style={[styles.customBrightnessFill, { height: `${brightnessLevel * 100}%` }]} />
+                  </View>
+                </View>
               </View>
             )}
 
-            {!isLiveStream && (<View style={styles.centerControls}>
+            {!isLiveStream && (<View style={styles.centerControls} pointerEvents={showControls ? 'box-none' : 'none'}>
               <TouchableOpacity style={styles.seekButton} onPress={seekBackward}>
                 {/* <Ionicons name="play-back" size={40} color="white" /> */}
                 <MaterialIcons name="replay-10" size={48} color="white" />
@@ -2576,7 +2674,7 @@ const VideoPlayerScreen = ({ route }) => {
             </View>
             )}
 
-            {isLiveStream && (<View style={styles.centerControls}>
+            {isLiveStream && (<View style={styles.centerControls} pointerEvents={showControls ? 'box-none' : 'none'}>
               <TouchableOpacity style={styles.playPauseButton} onPress={toggleMute}>
                 <Ionicons name={isMuted ? "volume-mute" : "volume-high"} size={60} color="white" />
               </TouchableOpacity>
@@ -2596,7 +2694,7 @@ const VideoPlayerScreen = ({ route }) => {
                       <View style={styles.progressBar} ref={progressBarRef}>
                         <View style={[styles.progressFill, { width: `${progressPercent}%` }]} />
                         <View style={[styles.progressThumb, { left: `${progressPercent}%` }]} />
-                        <View style={styles.progressTouchArea} {...progressPanResponder.panHandlers} />
+                        <View style={styles.progressTouchArea} {...(showControls ? progressPanResponder.panHandlers : {})} />
                       </View>
                       <View style={styles.liveIndicatorContainer}>
                         <View style={[styles.liveCircle, { backgroundColor: isAtLiveEdge ? '#FF0000' : '#888888' }]} />
@@ -2606,16 +2704,22 @@ const VideoPlayerScreen = ({ route }) => {
                   );
                 } else {
                   const displayPosition = isSeeking && seekPreviewPosition !== null ? seekPreviewPosition : position;
+                  const actualPosition = position;
                   const progressPercent = (displayPosition / Math.max(duration, 1)) * 100;
+                  const timeRemaining = duration - actualPosition;
                   return (
                     <>
-                      <Text style={styles.timeText}>{formatTime(displayPosition)}</Text>
                       <View style={styles.progressBar} ref={progressBarRef}>
                         <View style={[styles.progressFill, { width: `${progressPercent}%` }]} />
-                        <View style={[styles.progressThumb, { left: `${progressPercent}%` }]} />
-                        <View style={styles.progressTouchArea} {...progressPanResponder.panHandlers} />
+                        {isSeeking && seekPreviewPosition !== null && (
+                          <View style={[styles.seekThumb, { left: `${progressPercent}%` }]} />
+                        )}
+                        {!isSeeking && (
+                          <View style={[styles.progressThumb, { left: `${progressPercent}%` }]} />
+                        )}
+                        <View style={styles.progressTouchArea} {...(showControls ? progressPanResponder.panHandlers : {})} />
                       </View>
-                      <Text style={styles.timeText}>{formatTime(duration)}</Text>
+                      <Text style={styles.timeText}>{formatTime(-timeRemaining, true)}</Text>
                     </>
                   );
                 }
@@ -2623,6 +2727,13 @@ const VideoPlayerScreen = ({ route }) => {
             </SafeAreaView>
           </>
         </Animated.View>
+
+        {/* Seek Preview Box */}
+        {!isLiveStream && isSeeking && seekPreviewPosition !== null && seekPreviewXPosition > 0 && (
+          <View style={[styles.seekPreviewBox, { left: Math.max(10, Math.min(seekPreviewXPosition - 40, screenDimensions.width - 90)) }]}>
+            <Text style={styles.seekPreviewText}>{formatTime(seekPreviewPosition)}</Text>
+          </View>
+        )}
 
         {/* Render Next Episode Button OUTSIDE the fading wrapper */}
         {renderNextEpisodeButton()}
@@ -2763,18 +2874,58 @@ const styles = StyleSheet.create({
   controlButton: { padding: 8, marginLeft: 8 },
   airPlayButtonContainer: { marginLeft: 8, justifyContent: 'center', alignItems: 'center' },
   airPlayButton: { width: 32, height: 32, color: 'white', borderColor: 'white' },
-  brightnessSliderContainer: { position: 'absolute', left: 40, top: '20%', bottom: '20%', width: 40, justifyContent: 'center', alignItems: 'center' },
-  brightnessIcon: { marginBottom: 55 },
-  brightnessSlider: { width: 150, height: 30, transform: [{ rotate: '-90deg' }] },
+  brightnessSliderContainer: { position: 'absolute', left: 20, top: '20%', bottom: '20%', width: 80, justifyContent: 'center', alignItems: 'center' },
+  brightnessIcon: { marginTop: 10 },
+  customBrightnessSliderWrapper: { 
+    width: 100, 
+    height: 150, 
+    justifyContent: 'center', 
+    alignItems: 'center',
+    paddingHorizontal: 15,
+    paddingVertical: 10,
+  },
+  customBrightnessTrack: {
+    width: 4,
+    height: 130,
+    backgroundColor: 'rgba(255, 255, 255, 0.3)',
+    borderRadius: 2,
+    overflow: 'hidden',
+    justifyContent: 'flex-end',
+  },
+  customBrightnessFill: {
+    width: '100%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 2,
+  },
   centerControls: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'center', alignItems: 'center', flexDirection: 'row' },
   playPauseButton: { borderRadius: 50, padding: 12, marginHorizontal: 30 },
   seekButton: { borderRadius: 40, padding: 8 },
   bottomControls: { position: 'absolute', bottom: 0, left: 0, right: 0, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 10 },
-  progressBar: { flex: 1, height: 4, backgroundColor: 'rgba(255, 255, 255, 0.3)', marginHorizontal: 15, borderRadius: 2, overflow: 'hidden' },
+  progressBar: { flex: 1, height: 6, backgroundColor: 'rgba(255, 255, 255, 0.3)', marginHorizontal: 13, borderRadius: 2, overflow: 'hidden' },
   progressFill: { height: '100%', backgroundColor: '#E50914', borderRadius: 2 },
-  progressThumb: { position: 'absolute', top: -4, width: 12, height: 12, borderRadius: 6, backgroundColor: '#E50914', transform: [{ translateX: -6 }], zIndex: 3 },
-  progressTouchArea: { position: 'absolute', height: 20, width: '100%', top: -8, backgroundColor: 'transparent', zIndex: 4 },
+  progressThumb: { position: 'absolute', top: -5, width: 14, height: 14, borderRadius: 7, backgroundColor: '#E50914', transform: [{ translateX: -7 }], zIndex: 3 },
+  seekThumb: { position: 'absolute', top: -6, width: 16, height: 16, borderRadius: 8, backgroundColor: '#E50914', transform: [{ translateX: -8 }], zIndex: 3, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.5, shadowRadius: 4, elevation: 5 },
+  progressTouchArea: { position: 'absolute', height: 100, width: '100%', top: -23, backgroundColor: 'transparent', zIndex: 4 },
   timeText: { color: '#fff', fontSize: 14, minWidth: 40, textAlign: 'center' },
+  seekPreviewBox: {
+    position: 'absolute',
+    bottom: 70,
+    backgroundColor: 'rgba(0, 0, 0, 0.85)',
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    zIndex: 100,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.5,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  seekPreviewText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
   liveIndicatorContainer: { flexDirection: 'row', alignItems: 'center', minWidth: 60, justifyContent: 'center' },
   liveCircle: { width: 10, height: 10, borderRadius: 5, marginRight: 6 },
   liveText: { color: '#fff', fontSize: 14, fontWeight: 'bold', letterSpacing: 1 },

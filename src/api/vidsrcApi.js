@@ -41,13 +41,8 @@ export const getActiveStreamSources = () => {
 
 
 // Function to get streaming URL for a given source's baseUrl, movie or TV show
-export const getStreamingUrl = (baseUrl, tmdbId, type = 'movie', season = null, episode = null) => {
+export const getStreamingUrl = (baseUrl, tmdbId, type = 'movie', season = null, episode = null, mediaTitle = null) => {
   let path;
-  // The baseUrl provided here is the `baseUrl` (derived from defaultBaseUrl) from the source object.
-  // The path construction logic seems generic enough for the current sources.
-  // If a source required a radically different path structure not based on /tv/... or /movie/...
-  // then this function would need to be more conditional, or the path construction
-  // could be part of the source object itself.
 
   if (baseUrl.includes('vidsrc.cc')) {
     let url = baseUrl;
@@ -70,10 +65,6 @@ export const getStreamingUrl = (baseUrl, tmdbId, type = 'movie', season = null, 
     console.warn(`[vidsrcApi] Invalid type or missing season/episode for TV: ${type}`);
     return null;
   }
-  // The problem description mentioned autoPlay=true for vidsrc.cc, let's assume it's desired for all.
-  // The original code for embed.su and vidsrc.su did NOT have autoPlay=true.
-  // Reverting to no autoPlay query param for now, as per original file structure for these two.
-  // If autoPlay is desired, it should be added back here: `${baseUrl}${path}?autoPlay=true`
   return `${baseUrl}${path}`;
 };
 

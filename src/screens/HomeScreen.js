@@ -231,14 +231,12 @@ const HomeScreen = () => {
   // Effect to run animation on focus
   useFocusEffect(
     useCallback(() => {
-      // Reset opacity to 0 initially in case we navigate back quickly
       ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP)
         .catch(e => console.warn("Failed to lock HomeScreen orientation:", e));
       opacity.value = 0;
-      opacity.value = withTiming(1, { duration: 300 }); // Fade in over 300ms
+      opacity.value = withTiming(1, { duration: 300 });
 
       return () => {
-        // You could fade out here if desired, but fading in the next screen might be enough
       };
     }, [opacity])
   );

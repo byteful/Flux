@@ -18,11 +18,9 @@ const STREAM_SOURCE_SIGNATURE_KEY = 'streamSourceSignature';
 // This should match the `name` property of the sources in vidsrcApi.js
 // Also include defaultBaseUrl which will be used by vidsrcApi.js if a source is newly added.
 export const DEFAULT_STREAM_SOURCES = [
-  { name: 'vidsrc.cc', timeoutInSeconds: 10, type: 'direct', defaultBaseUrl: 'https://vidsrc.cc/v3/embed' },
-  { name: 'vidsrc.su', timeoutInSeconds: 10, type: 'direct', defaultBaseUrl: 'https://vidsrc.su/embed' },
-  { name: 'hexa.watch', timeoutInSeconds: 10, type: 'direct', defaultBaseUrl: 'https://hexa.watch/watch' },
-  { name: 'embed.su', timeoutInSeconds: 10, type: 'direct', defaultBaseUrl: 'https://embed.su/embed' },
-  // Add other sources here with their default properties if they are introduced
+  { name: 'FluxSource', timeoutInSeconds: 15, type: 'direct', defaultBaseUrl: 'https://streamprovider.koyeb.app/' },
+  // { name: 'hexa.su', timeoutInSeconds: 10, type: 'direct', defaultBaseUrl: 'https://hexa.su/watch' },
+  { name: 'cineby.gd', timeoutInSeconds: 10, type: 'direct', defaultBaseUrl: 'https://cineby.gd' },
 ];
 
 export const saveWatchProgress = async (mediaId, data) => {
