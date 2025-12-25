@@ -226,9 +226,9 @@ const VideoPlayerScreen = ({ route }) => {
     setShowControls(value);
   }, [setShowControls]);
 
-  const getStreamHeaders = useCallback(() => {
-    // No headers needed for offline/local file playback
-    if (isOffline || (videoUrl && videoUrl.startsWith('file://'))) {
+  const buildStreamHeaders = useCallback((url, referer) => {
+    // No headers needed for local file playback
+    if (url && url.startsWith('file://')) {
       return {};
     }
 
@@ -236,37 +236,41 @@ const VideoPlayerScreen = ({ route }) => {
       'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       'Accept': '*/*'
     };
-    // Determine Origin and Referer based on the videoUrl or streamReferer
+    // Determine Origin and Referer based on the url or referer
     let originToUse = 'https://vidsrc.su'; // Default
     let refererToUse = 'https://vidsrc.su/'; // Default
 
-    if (streamReferer) {
+    if (referer) {
       try {
-        const url = new URL(streamReferer);
-        refererToUse = `${url.protocol}//${url.hostname}/`; // Trimmed URL
-        originToUse = url.origin;
+        const urlObj = new URL(referer);
+        refererToUse = `${urlObj.protocol}//${urlObj.hostname}/`; // Trimmed URL
+        originToUse = urlObj.origin;
       } catch (e) {
-        // Fallback if streamReferer is not a valid URL
-        refererToUse = streamReferer; // Use as is
+        // Fallback if referer is not a valid URL
+        refererToUse = referer; // Use as is
         try {
-          originToUse = new URL(streamReferer).origin;
-        } catch (e2) { /* keep default origin if streamReferer is invalid */ }
+          originToUse = new URL(referer).origin;
+        } catch (e2) { /* keep default origin if referer is invalid */ }
       }
-    } else if (videoUrl) {
+    } else if (url) {
       try {
-        const videoUrlObj = new URL(videoUrl);
+        const videoUrlObj = new URL(url);
         originToUse = videoUrlObj.origin;
         refererToUse = videoUrlObj.origin + '/'; // Common practice for referer
-      } catch (e) { /* ignore if videoUrl is not a valid URL */ }
+      } catch (e) { /* ignore if url is not a valid URL */ }
     }
 
     headers['Origin'] = originToUse;
-    if (refererToUse && videoUrl && !videoUrl.includes("fleurixsun.xyz")) { // hard coded this in cause it was just tweaking and i didnt feel like writing a whole detection system for this edge case
+    if (refererToUse && url && !url.includes("fleurixsun.xyz")) {
       headers['Referer'] = refererToUse;
     }
 
     return headers;
-  }, [streamReferer, videoUrl, isOffline]); // Depend on streamReferer, videoUrl, and isOffline
+  }, []);
+
+  const getStreamHeaders = useCallback(() => {
+    return buildStreamHeaders(videoUrl, streamReferer);
+  }, [buildStreamHeaders, videoUrl, streamReferer]);
 
   const player = useVideoPlayer(null);
 
@@ -1243,7 +1247,7 @@ const VideoPlayerScreen = ({ route }) => {
           setCurrentWebViewConfig(null);
           setCurrentAttemptingSource(null);
           setIsLiveStream(true);
-          player.replaceAsync({ uri: streamUrl, headers: getStreamHeaders() });
+          player.replaceAsync({ uri: streamUrl, headers: buildStreamHeaders(streamUrl, null) });
         },
         (err, sourceName) => {
           if (!isMounted) return;
@@ -1295,7 +1299,7 @@ const VideoPlayerScreen = ({ route }) => {
           setCaptchaUrl(null);
           setCurrentWebViewConfig(null);
           setCurrentAttemptingSource(null);
-          player.replaceAsync({ uri: streamUrl, headers: getStreamHeaders() });
+          player.replaceAsync({ uri: streamUrl, headers: buildStreamHeaders(streamUrl, referer) });
           findSubtitles();
         },
         // onSourceError: (error, sourceName) => void
@@ -1391,6 +1395,16 @@ const VideoPlayerScreen = ({ route }) => {
           const downloadId = generateDownloadId(mediaType, mediaId, season, episode);
           downloadManager.markAsWatched(downloadId);
           return;
+        } else {
+          // Offline file is missing - clean up the stale download entry
+          console.log('[VideoPlayerScreen] Offline file missing, cleaning up download entry and switching to online mode');
+          const downloadId = generateDownloadId(mediaType, mediaId, season, episode);
+          try {
+            await downloadManager.cancelDownload(downloadId);
+          } catch (cleanupErr) {
+            console.warn('[VideoPlayerScreen] Failed to clean up missing download entry:', cleanupErr);
+          }
+          // Fall through to online streaming
         }
       }
 
@@ -1411,7 +1425,7 @@ const VideoPlayerScreen = ({ route }) => {
         setStreamReferer(cachedStreamData.referer);
         setCurrentPlayingSourceName(cachedStreamData.sourceName);
         setStreamExtractionComplete(true);
-        player.replaceAsync({ uri: cachedStreamData.url, headers: getStreamHeaders() });
+        player.replaceAsync({ uri: cachedStreamData.url, headers: buildStreamHeaders(cachedStreamData.url, cachedStreamData.referer) });
         findSubtitles();
       } else if (isMounted) {
         setupStreamExtraction();
@@ -1545,7 +1559,7 @@ const VideoPlayerScreen = ({ route }) => {
       setResumeTime(currentPositionToResume);
       setVideoUrl(streamUrl);
       setStreamExtractionComplete(true);
-      player.replaceAsync({ uri: streamUrl, headers: getStreamHeaders() });
+      player.replaceAsync({ uri: streamUrl, headers: buildStreamHeaders(streamUrl, referer) });
       setManualWebViewVisible(false);
       setCaptchaUrl(null);
       setCurrentWebViewConfig(null);
@@ -1758,6 +1772,18 @@ const VideoPlayerScreen = ({ route }) => {
       clearTimeout(bufferingTimeoutRef.current);
       bufferingTimeoutRef.current = null;
     }
+
+    // Pause the player before resetting to avoid inconsistent state
+    if (player) {
+      try {
+        if (player.isPlaying) {
+          await player.pause();
+        }
+      } catch (e) {
+        console.warn('[VideoPlayerScreen] Error pausing player on reload:', e);
+      }
+    }
+
     setShowBufferingAlert(false);
     setShowNextEpisodeButton(false);
     nextEpisodeDetailsRef.current = null;

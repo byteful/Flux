@@ -461,7 +461,30 @@ class DownloadManager {
   }
 
   async getCompletedDownloads() {
-    return getCompletedDownloads();
+    const downloads = await getCompletedDownloads();
+    const { getInfoAsync } = require('expo-file-system/legacy');
+    const validDownloads = [];
+
+    for (const entry of downloads) {
+      const filePath = entry.filePath.endsWith('.mp4') || entry.filePath.endsWith('.m3u8')
+        ? entry.filePath
+        : `${entry.filePath}video.mp4`;
+
+      try {
+        const cleanPath = filePath.replace('file://', '');
+        const fileInfo = await getInfoAsync(cleanPath);
+
+        if (fileInfo.exists) {
+          validDownloads.push(entry);
+        } else {
+          await deleteDownload(entry.id);
+        }
+      } catch (error) {
+        validDownloads.push(entry);
+      }
+    }
+
+    return validDownloads;
   }
 
   async getActiveDownloads() {
@@ -471,13 +494,56 @@ class DownloadManager {
   async isDownloaded(mediaType, tmdbId, season = null, episode = null) {
     const downloadId = generateDownloadId(mediaType, tmdbId, season, episode);
     const entry = await getDownloadEntry(downloadId);
-    return entry?.status === DOWNLOAD_STATUS.COMPLETED;
+
+    if (entry?.status !== DOWNLOAD_STATUS.COMPLETED) {
+      return false;
+    }
+
+    const filePath = entry.filePath.endsWith('.mp4') || entry.filePath.endsWith('.m3u8')
+      ? entry.filePath
+      : `${entry.filePath}video.mp4`;
+
+    try {
+      const { getInfoAsync } = require('expo-file-system/legacy');
+      const cleanPath = filePath.replace('file://', '');
+      const fileInfo = await getInfoAsync(cleanPath);
+
+      if (!fileInfo.exists) {
+        await deleteDownload(downloadId);
+        return false;
+      }
+      return true;
+    } catch (error) {
+      return true;
+    }
   }
 
   async getDownloadStatus(mediaType, tmdbId, season = null, episode = null) {
     const downloadId = generateDownloadId(mediaType, tmdbId, season, episode);
     const entry = await getDownloadEntry(downloadId);
-    return entry?.status || null;
+
+    if (!entry) return null;
+
+    if (entry.status === DOWNLOAD_STATUS.COMPLETED) {
+      const filePath = entry.filePath.endsWith('.mp4') || entry.filePath.endsWith('.m3u8')
+        ? entry.filePath
+        : `${entry.filePath}video.mp4`;
+
+      try {
+        const { getInfoAsync } = require('expo-file-system/legacy');
+        const cleanPath = filePath.replace('file://', '');
+        const fileInfo = await getInfoAsync(cleanPath);
+
+        if (!fileInfo.exists) {
+          await deleteDownload(downloadId);
+          return null;
+        }
+      } catch (error) {
+        // If we can't check, assume it exists
+      }
+    }
+
+    return entry.status;
   }
 
   async getDownloadProgress(mediaType, tmdbId, season = null, episode = null) {

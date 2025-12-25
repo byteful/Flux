@@ -86,23 +86,44 @@ class FFmpegConverter {
         throw new Error('No segment files found');
       }
 
+      const hasInit = await this.hasInitSegment(segmentsDirClean);
+      const isFragmentedMp4 = segmentFiles[0]?.endsWith('.m4s') || hasInit;
+
       const concatFilePath = `${segmentsDirClean}concat_list.txt`;
       let concatContent = '';
+
+      if (isFragmentedMp4 && hasInit) {
+        concatContent += `file '${segmentsDirClean}init.mp4'\n`;
+      }
+
       for (const segmentFile of segmentFiles) {
         concatContent += `file '${segmentsDirClean}${segmentFile}'\n`;
       }
 
       await LegacyFileSystem.writeAsStringAsync(concatFilePath, concatContent);
 
-      const command = [
-        '-f', 'concat',
-        '-safe', '0',
-        '-i', concatFilePath,
-        '-c', 'copy',
-        '-movflags', '+faststart',
-        '-y',
-        outputPathClean
-      ].join(' ');
+      let command;
+      if (isFragmentedMp4) {
+        command = [
+          '-f', 'concat',
+          '-safe', '0',
+          '-i', concatFilePath,
+          '-c', 'copy',
+          '-movflags', '+faststart',
+          '-y',
+          outputPathClean
+        ].join(' ');
+      } else {
+        command = [
+          '-f', 'concat',
+          '-safe', '0',
+          '-i', concatFilePath,
+          '-c', 'copy',
+          '-movflags', '+faststart',
+          '-y',
+          outputPathClean
+        ].join(' ');
+      }
 
       if (onProgress) {
         FFmpegKitConfig.enableStatisticsCallback((statistics) => {
@@ -162,7 +183,8 @@ class FFmpegConverter {
     try {
       const contents = await LegacyFileSystem.readDirectoryAsync(segmentsDir);
       const segmentFiles = contents
-        .filter(file => file.endsWith('.ts'))
+        .filter(file => file.endsWith('.ts') || file.endsWith('.m4s'))
+        .filter(file => file.startsWith('segment_'))
         .sort((a, b) => {
           const numA = parseInt(a.match(/segment_(\d+)/)?.[1] || '0');
           const numB = parseInt(b.match(/segment_(\d+)/)?.[1] || '0');
@@ -171,6 +193,15 @@ class FFmpegConverter {
       return segmentFiles;
     } catch (error) {
       return [];
+    }
+  }
+
+  async hasInitSegment(segmentsDir) {
+    try {
+      const contents = await LegacyFileSystem.readDirectoryAsync(segmentsDir);
+      return contents.includes('init.mp4');
+    } catch (error) {
+      return false;
     }
   }
 

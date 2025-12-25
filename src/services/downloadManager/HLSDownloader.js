@@ -13,6 +13,7 @@ class HLSDownloader {
     this.onError = onError;
 
     this.segments = [];
+    this.initSegment = null;
     this.downloadedSegments = 0;
     this.totalSegments = 0;
     this.isPaused = false;
@@ -36,30 +37,68 @@ class HLSDownloader {
       if (this.isCancelled) return;
 
       const parsedPlaylist = this.parsePlaylist(playlistContent, this.entry.streamUrl);
+      console.log(`[HLSDownloader] Initial playlist: isMaster=${parsedPlaylist.isMaster}, variants=${parsedPlaylist.variants.length}, segments=${parsedPlaylist.segments.length}`);
 
+      let variantParsed;
+      let playlistInfo;
       if (parsedPlaylist.isMaster) {
+        console.log(`[HLSDownloader] Master playlist detected with ${parsedPlaylist.variants.length} variants`);
+        parsedPlaylist.variants.forEach((v, i) => {
+          console.log(`[HLSDownloader]   Variant ${i}: bandwidth=${v.bandwidth}, resolution=${v.resolution}`);
+        });
+
         const selectedVariant = this.selectBestVariant(parsedPlaylist.variants);
         if (!selectedVariant) {
           throw new Error('No suitable video quality found in master playlist');
         }
+        console.log(`[HLSDownloader] Selected variant: bandwidth=${selectedVariant.bandwidth}, resolution=${selectedVariant.resolution}`);
 
         const variantContent = await this.fetchPlaylist(selectedVariant.url);
         if (this.isCancelled) return;
 
-        const variantParsed = this.parsePlaylist(variantContent, selectedVariant.url);
+        variantParsed = this.parsePlaylist(variantContent, selectedVariant.url);
+        console.log(`[HLSDownloader] Variant playlist: segments=${variantParsed.segments.length}, isVOD=${variantParsed.isVOD}, duration=${variantParsed.totalDuration}s`);
         this.segments = variantParsed.segments;
+        this.initSegment = variantParsed.initSegment;
+        playlistInfo = variantParsed;
       } else {
+        console.log(`[HLSDownloader] Direct media playlist (not master)`);
         this.segments = parsedPlaylist.segments;
+        this.initSegment = parsedPlaylist.initSegment;
+        playlistInfo = parsedPlaylist;
       }
 
       this.totalSegments = this.segments.length;
+      const expectedDurationMinutes = Math.round(playlistInfo.totalDuration / 60);
+
+      console.log(`[HLSDownloader] Playlist info: ${this.totalSegments} segments, ~${expectedDurationMinutes} minutes, VOD: ${playlistInfo.isVOD}`);
+      console.log(`[HLSDownloader] Total duration: ${playlistInfo.totalDuration} seconds`);
+      console.log(`[HLSDownloader] First segment URL: ${this.segments[0]?.url?.substring(0, 100)}...`);
+      if (this.segments.length > 1) {
+        console.log(`[HLSDownloader] Last segment URL: ${this.segments[this.segments.length - 1]?.url?.substring(0, 100)}...`);
+      }
 
       if (this.totalSegments === 0) {
         throw new Error('No segments found in playlist');
       }
 
+      if (!playlistInfo.isVOD && expectedDurationMinutes < 30) {
+        console.warn(`[HLSDownloader] Warning: Playlist may be live/sliding window (no EXT-X-ENDLIST, duration: ${expectedDurationMinutes}min)`);
+        console.warn(`[HLSDownloader] The source may not provide full VOD content. Consider using a different source.`);
+      }
+
+      if (playlistInfo.isVOD && expectedDurationMinutes < 15) {
+        console.warn(`[HLSDownloader] Warning: VOD playlist has unusually short duration: ${expectedDurationMinutes} minutes`);
+      }
+
       this.reportProgress(5, 'downloading');
 
+      if (this.initSegment) {
+        await this.downloadInitSegment();
+        if (this.isCancelled) return;
+      }
+
+      let lastByteRangeEnd = 0;
       for (let i = 0; i < this.segments.length; i++) {
         if (this.isCancelled) return;
 
@@ -68,7 +107,15 @@ class HLSDownloader {
           if (this.isCancelled) return;
         }
 
-        await this.downloadSegment(this.segments[i], i);
+        const segment = this.segments[i];
+        if (segment.byteRange && segment.byteRange.offset === null) {
+          segment.byteRange.offset = lastByteRangeEnd;
+        }
+        if (segment.byteRange) {
+          lastByteRangeEnd = segment.byteRange.offset + segment.byteRange.length;
+        }
+
+        await this.downloadSegment(segment, i);
         this.downloadedSegments++;
 
         const progress = 5 + ((this.downloadedSegments / this.totalSegments) * 90);
@@ -167,12 +214,29 @@ class HLSDownloader {
       isMaster: false,
       variants: [],
       segments: [],
+      initSegment: null,
+      isVOD: false,
+      totalDuration: 0,
     };
 
     let currentSegmentDuration = 0;
+    let expectingSegmentUrl = false;
+    let currentByteRange = null;
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
+
+      if (line.startsWith('#EXT-X-ENDLIST')) {
+        result.isVOD = true;
+        continue;
+      }
+
+      if (line.startsWith('#EXT-X-PLAYLIST-TYPE:')) {
+        if (line.includes('VOD')) {
+          result.isVOD = true;
+        }
+        continue;
+      }
 
       if (line.startsWith('#EXT-X-STREAM-INF:')) {
         result.isMaster = true;
@@ -188,24 +252,78 @@ class HLSDownloader {
           });
           i++;
         }
+        continue;
+      }
+
+      if (line.startsWith('#EXT-X-MAP:')) {
+        const uri = this.extractAttribute(line, 'URI');
+        if (uri) {
+          result.initSegment = {
+            url: this.resolveUrl(uri, baseUrl),
+            byteRange: this.extractAttribute(line, 'BYTERANGE'),
+          };
+        }
+        continue;
+      }
+
+      if (line.startsWith('#EXT-X-BYTERANGE:')) {
+        const rangeMatch = line.match(/#EXT-X-BYTERANGE:(\d+)(?:@(\d+))?/);
+        if (rangeMatch) {
+          currentByteRange = {
+            length: parseInt(rangeMatch[1]),
+            offset: rangeMatch[2] ? parseInt(rangeMatch[2]) : null,
+          };
+        }
+        continue;
       }
 
       if (line.startsWith('#EXTINF:')) {
-        const durationMatch = line.match(/#EXTINF:([\d.]+)/);
+        const durationMatch = line.match(/#EXTINF:\s*([\d.]+)/);
         currentSegmentDuration = durationMatch ? parseFloat(durationMatch[1]) : 0;
+        expectingSegmentUrl = true;
+        continue;
       }
 
-      if (!line.startsWith('#') && (line.endsWith('.ts') || line.includes('.ts?') || line.endsWith('.m4s') || currentSegmentDuration > 0)) {
-        result.segments.push({
-          url: this.resolveUrl(line, baseUrl),
-          duration: currentSegmentDuration,
-          index: result.segments.length,
-        });
-        currentSegmentDuration = 0;
+      if (!line.startsWith('#')) {
+        if (expectingSegmentUrl || this.isSegmentUrl(line)) {
+          result.segments.push({
+            url: this.resolveUrl(line, baseUrl),
+            duration: currentSegmentDuration,
+            index: result.segments.length,
+            byteRange: currentByteRange,
+          });
+          result.totalDuration += currentSegmentDuration;
+          currentSegmentDuration = 0;
+          expectingSegmentUrl = false;
+          currentByteRange = null;
+        }
       }
     }
 
     return result;
+  }
+
+  isSegmentUrl(url) {
+    if (!url || url.length === 0) return false;
+
+    const segmentExtensions = ['.ts', '.m4s', '.mp4', '.m4v', '.m4a', '.aac', '.fmp4', '.cmfv', '.cmfa'];
+    const lowerUrl = url.toLowerCase();
+
+    if (segmentExtensions.some(ext =>
+      lowerUrl.endsWith(ext) || lowerUrl.includes(ext + '?') || lowerUrl.includes(ext + '&')
+    )) {
+      return true;
+    }
+
+    if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('/')) {
+      const urlWithoutQuery = url.split('?')[0].split('#')[0];
+      const lastPathPart = urlWithoutQuery.split('/').pop();
+      if (lastPathPart && !lastPathPart.includes('.')) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   extractAttribute(line, attr) {
@@ -250,8 +368,10 @@ class HLSDownloader {
     return preferred || sorted[0];
   }
 
-  async downloadSegment(segment, index) {
-    const filename = `segment_${String(index).padStart(5, '0')}.ts`;
+  async downloadInitSegment() {
+    if (!this.initSegment) return;
+
+    const filename = 'init.mp4';
     const filePath = `${this.segmentsDir}${filename}`;
 
     const maxRetries = 3;
@@ -262,6 +382,67 @@ class HLSDownloader {
         const headers = {};
         if (this.entry.streamReferer) {
           headers['Referer'] = this.entry.streamReferer;
+        }
+        if (this.initSegment.byteRange) {
+          const range = this.parseByteRange(this.initSegment.byteRange);
+          if (range) {
+            headers['Range'] = `bytes=${range.start}-${range.end}`;
+          }
+        }
+
+        const result = await LegacyFileSystem.downloadAsync(this.initSegment.url, filePath, { headers });
+
+        if (result.status >= 200 && result.status < 300) {
+          const file = new File(filePath);
+          if (file.exists && file.size > 0) {
+            this.totalBytesDownloaded += file.size;
+            this.initSegment.localPath = filePath;
+            this.initSegment.localFilename = filename;
+            return;
+          }
+        }
+
+        throw new Error(`Init segment download failed with status ${result.status}`);
+      } catch (error) {
+        lastError = error;
+        if (attempt < maxRetries - 1) {
+          await this.delay(1000 * (attempt + 1));
+        }
+      }
+    }
+
+    throw new Error(`Failed to download init segment after ${maxRetries} attempts: ${lastError?.message}`);
+  }
+
+  parseByteRange(byteRangeStr) {
+    if (!byteRangeStr) return null;
+    const match = byteRangeStr.match(/(\d+)(?:@(\d+))?/);
+    if (match) {
+      const length = parseInt(match[1]);
+      const offset = match[2] ? parseInt(match[2]) : 0;
+      return { start: offset, end: offset + length - 1 };
+    }
+    return null;
+  }
+
+  async downloadSegment(segment, index) {
+    const extension = segment.byteRange ? '.m4s' : '.ts';
+    const filename = `segment_${String(index).padStart(5, '0')}${extension}`;
+    const filePath = `${this.segmentsDir}${filename}`;
+
+    const maxRetries = 3;
+    let lastError = null;
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const headers = {};
+        if (this.entry.streamReferer) {
+          headers['Referer'] = this.entry.streamReferer;
+        }
+        if (segment.byteRange) {
+          const start = segment.byteRange.offset;
+          const end = start + segment.byteRange.length - 1;
+          headers['Range'] = `bytes=${start}-${end}`;
         }
 
         const result = await LegacyFileSystem.downloadAsync(segment.url, filePath, { headers });
@@ -289,10 +470,20 @@ class HLSDownloader {
   }
 
   async createLocalPlaylist() {
+    const isFragmentedMp4 = this.initSegment || this.segments.some(s => s.byteRange);
+
     let playlistContent = '#EXTM3U\n';
-    playlistContent += '#EXT-X-VERSION:3\n';
+    playlistContent += isFragmentedMp4 ? '#EXT-X-VERSION:7\n' : '#EXT-X-VERSION:3\n';
     playlistContent += '#EXT-X-TARGETDURATION:10\n';
     playlistContent += '#EXT-X-MEDIA-SEQUENCE:0\n';
+
+    if (this.initSegment && this.initSegment.localFilename) {
+      let initPath = `${this.segmentsDir}${this.initSegment.localFilename}`;
+      if (!initPath.startsWith('file://')) {
+        initPath = `file://${initPath}`;
+      }
+      playlistContent += `#EXT-X-MAP:URI="${initPath}"\n`;
+    }
 
     for (const segment of this.segments) {
       playlistContent += `#EXTINF:${segment.duration.toFixed(6)},\n`;

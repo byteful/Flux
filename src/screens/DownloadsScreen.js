@@ -12,6 +12,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { useSharedValue, withTiming, useAnimatedStyle } from 'react-native-reanimated';
+import * as LegacyFileSystem from 'expo-file-system/legacy';
 import downloadManager from '../services/downloadManager';
 import {
   getDownloadStorageUsage,
@@ -147,21 +148,48 @@ const DownloadsScreen = () => {
       basePath = `${item.filePath}video.mp4`;
     }
 
-    const offlinePath = basePath.startsWith('file://')
-      ? basePath
-      : `file://${basePath}`;
+    const cleanPath = basePath.replace('file://', '');
 
-    navigation.navigate('VideoPlayer', {
-      mediaId: item.tmdbId,
-      mediaType: item.mediaType,
-      title: item.title,
-      season: item.season,
-      episode: item.episode,
-      episodeTitle: item.episodeTitle,
-      poster_path: item.posterPath,
-      isOffline: true,
-      offlineFilePath: offlinePath,
-    });
+    try {
+      const fileInfo = await LegacyFileSystem.getInfoAsync(cleanPath);
+
+      if (!fileInfo.exists) {
+        Alert.alert(
+          'File Not Found',
+          'The downloaded file is missing. Would you like to remove this entry and re-download?',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Remove Entry',
+              style: 'destructive',
+              onPress: async () => {
+                await downloadManager.cancelDownload(item.id);
+                loadData();
+              },
+            },
+          ]
+        );
+        return;
+      }
+
+      const offlinePath = basePath.startsWith('file://')
+        ? basePath
+        : `file://${basePath}`;
+
+      navigation.navigate('VideoPlayer', {
+        mediaId: item.tmdbId,
+        mediaType: item.mediaType,
+        title: item.title,
+        season: item.season,
+        episode: item.episode,
+        episodeTitle: item.episodeTitle,
+        poster_path: item.posterPath,
+        isOffline: true,
+        offlineFilePath: offlinePath,
+      });
+    } catch (error) {
+      Alert.alert('Error', 'Failed to access downloaded file');
+    }
   };
 
   const handleDelete = async (downloadId) => {
