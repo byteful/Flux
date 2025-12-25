@@ -22,7 +22,8 @@ export default {
       infoPlist: {
         CFBundleDisplayName: IS_DEV ? "Flux (Dev)" : "Flux",
         UIBackgroundModes: [
-          "audio"
+          "audio",
+          "processing"
         ],
         NSAppTransportSecurity: {
           NSAllowsArbitraryLoads: true,
@@ -68,7 +69,8 @@ export default {
           "supportsPictureInPicture": true
         }
       ],
-      "expo-secure-store"
+      "expo-secure-store",
+      "expo-background-task"
     ],
     assetBundlePatterns: [
       "**/*"

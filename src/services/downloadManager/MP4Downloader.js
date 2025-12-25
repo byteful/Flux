@@ -71,7 +71,6 @@ class MP4Downloader {
         });
       }
     } catch (error) {
-      console.error('MP4Downloader error:', error);
       if (this.onError && !this.isCancelled) {
         this.onError(error);
       }
@@ -85,7 +84,7 @@ class MP4Downloader {
         const savable = await this.downloadResumable.pauseAsync();
         return savable;
       } catch (error) {
-        console.error('MP4Downloader pause error:', error);
+        // Pause failed
       }
     }
     return null;
@@ -112,7 +111,6 @@ class MP4Downloader {
           }
         }
       } catch (error) {
-        console.error('MP4Downloader resume error:', error);
         if (this.onError) {
           this.onError(error);
         }

@@ -76,7 +76,7 @@ const DownloadButton = ({
       setStatus(currentStatus);
       setProgress(currentProgress || 0);
     } catch (error) {
-      console.error('DownloadButton checkStatus error:', error);
+      // Error checking status
     } finally {
       setIsLoading(false);
     }
@@ -88,6 +88,11 @@ const DownloadButton = ({
     if (isSeasonDownload) return;
 
     const unsubscribe = downloadManager.subscribe((event, data) => {
+      if (event === 'queue-updated' || event === 'all-cancelled' || event === 'all-retried') {
+        checkStatus();
+        return;
+      }
+
       if (data?.id === downloadId) {
         if (event === 'download-progress') {
           setProgress(data.progress);
@@ -220,7 +225,6 @@ const DownloadButton = ({
           break;
       }
     } catch (error) {
-      console.error('DownloadButton handlePress error:', error);
       Alert.alert('Error', 'Failed to process download request');
     }
   };

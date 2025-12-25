@@ -21,8 +21,10 @@ import {
 class DownloadManager {
   constructor() {
     this.activeDownloads = new Map();
+    this.pendingFetches = new Set();
     this.listeners = new Set();
     this.isInitialized = false;
+    this.isProcessingQueue = false;
     this.networkUnsubscribe = null;
   }
 
@@ -44,7 +46,7 @@ class DownloadManager {
 
       this.processQueue();
     } catch (error) {
-      console.error('DownloadManager initialization error:', error);
+      // Initialization failed
     }
   }
 
@@ -72,7 +74,6 @@ class DownloadManager {
       this.processQueue();
       return entry;
     } catch (error) {
-      console.error('DownloadManager addToQueue error:', error);
       throw error;
     }
   }
@@ -82,6 +83,17 @@ class DownloadManager {
 
     for (const episode of episodes) {
       try {
+        const alreadyDownloaded = await this.isDownloaded('tv', mediaId, seasonNumber, episode.episode_number);
+        if (alreadyDownloaded) {
+          continue;
+        }
+
+        const downloadId = generateDownloadId('tv', mediaId, seasonNumber, episode.episode_number);
+        const inQueue = downloadQueue.isInQueue(downloadId);
+        if (inQueue) {
+          continue;
+        }
+
         const mediaInfo = {
           mediaType: 'tv',
           tmdbId: mediaId,
@@ -97,7 +109,7 @@ class DownloadManager {
         const entry = await this.addToQueue(mediaInfo);
         entries.push(entry);
       } catch (error) {
-        console.error(`Failed to queue episode ${episode.episode_number}:`, error);
+        // Skip failed episodes
       }
     }
 
@@ -105,31 +117,48 @@ class DownloadManager {
   }
 
   async processQueue() {
-    if (!await this.canDownload()) {
+    if (this.isProcessingQueue) {
       return;
     }
 
-    const settings = await getDownloadSettings();
-    const availableSlots = settings.maxConcurrentDownloads - this.activeDownloads.size;
+    this.isProcessingQueue = true;
 
-    if (availableSlots <= 0) {
-      return;
-    }
-
-    for (let i = 0; i < availableSlots; i++) {
-      const next = downloadQueue.getNext();
-      if (!next) break;
-
-      if (!next.streamUrl) {
-        this.fetchAndStartDownload(next).catch(error => {
-          console.error(`Failed to fetch stream URL for ${next.id}:`, error);
-          this.handleError(next.id, error);
-        });
-        
-        continue;
+    try {
+      if (!await this.canDownload()) {
+        return;
       }
 
-      this.startDownload(next);
+      const settings = await getDownloadSettings();
+      const currentlyProcessing = this.activeDownloads.size + this.pendingFetches.size;
+      const availableSlots = settings.maxConcurrentDownloads - currentlyProcessing;
+
+      if (availableSlots <= 0) {
+        return;
+      }
+
+      for (let i = 0; i < availableSlots; i++) {
+        const next = downloadQueue.getNext();
+        if (!next) break;
+
+        if (this.pendingFetches.has(next.id)) {
+          continue;
+        }
+
+        if (!next.streamUrl) {
+          this.pendingFetches.add(next.id);
+          this.fetchAndStartDownload(next).catch(error => {
+            this.pendingFetches.delete(next.id);
+            this.handleError(next.id, error);
+          });
+
+          continue;
+        }
+
+        await downloadQueue.updateStatus(next.id, DOWNLOAD_STATUS.DOWNLOADING);
+        this.startDownload(next);
+      }
+    } finally {
+      this.isProcessingQueue = false;
     }
   }
 
@@ -137,13 +166,13 @@ class DownloadManager {
     try {
       const { getActiveStreamSources } = require('../../api/vidsrcApi');
       const sources = getActiveStreamSources();
-      
+
       const fluxSource = sources.find(s => s.name === 'FluxSource');
-      
+
       if (!fluxSource) {
         throw new Error('FluxSource not available for downloads');
       }
-      
+
       let fetchUrl;
       if (entry.mediaType === 'tv') {
         fetchUrl = `${fluxSource.baseUrl}?tmdbId=${entry.tmdbId}&season=${entry.season}&episode=${entry.episode}`;
@@ -151,21 +180,38 @@ class DownloadManager {
         fetchUrl = `${fluxSource.baseUrl}?tmdbId=${entry.tmdbId}`;
       }
 
-      const response = await fetch(fetchUrl);
+      const timeoutMs = (fluxSource.timeoutInSeconds || 15) * 1000;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+      let response;
+      try {
+        response = await fetch(fetchUrl, { signal: controller.signal });
+      } finally {
+        clearTimeout(timeoutId);
+      }
+
       const result = await response.json();
-      
+
       if (result.error || !result.url) {
         throw new Error(result.error || 'No stream URL found');
       }
 
       await this.setStreamUrlForDownload(entry.id, result.url, result.referer);
-      
+
+      this.pendingFetches.delete(entry.id);
+
+      await downloadQueue.updateStatus(entry.id, DOWNLOAD_STATUS.DOWNLOADING);
+
       const updatedEntry = await getDownloadEntry(entry.id);
       if (updatedEntry) {
         this.startDownload(updatedEntry);
       }
     } catch (error) {
-      console.error(`Error fetching stream URL for ${entry.id}:`, error);
+      this.pendingFetches.delete(entry.id);
+      if (error.name === 'AbortError') {
+        throw new Error('Stream URL fetch timed out');
+      }
       throw error;
     }
   }
@@ -175,7 +221,6 @@ class DownloadManager {
       return;
     }
 
-    await downloadQueue.updateStatus(entry.id, DOWNLOAD_STATUS.DOWNLOADING);
     this.notifyListeners('download-started', entry);
 
     const onProgress = (progressData) => {
@@ -282,16 +327,93 @@ class DownloadManager {
       await downloadQueue.pause(downloadId);
     }
     this.activeDownloads.clear();
+    this.pendingFetches.clear();
     this.notifyListeners('all-paused', {});
   }
 
   async cancelAllDownloads() {
+    const downloadIds = [];
+
     for (const [downloadId, downloader] of this.activeDownloads) {
       downloader.cancel();
+      downloadIds.push(downloadId);
     }
+
+    const queuedItems = downloadQueue.getAll();
+    for (const item of queuedItems) {
+      if (!downloadIds.includes(item.id)) {
+        downloadIds.push(item.id);
+      }
+    }
+
     this.activeDownloads.clear();
-    downloadQueue.clear();
+    this.pendingFetches.clear();
+    await downloadQueue.clear();
+
+    for (const downloadId of downloadIds) {
+      await deleteDownload(downloadId);
+    }
+
     this.notifyListeners('all-cancelled', {});
+  }
+
+  async cancelAllAndRetry() {
+    const itemsToRetry = [];
+
+    for (const [downloadId, downloader] of this.activeDownloads) {
+      downloader.cancel();
+      const entry = await getDownloadEntry(downloadId);
+      if (entry) {
+        itemsToRetry.push({
+          mediaType: entry.mediaType,
+          tmdbId: entry.tmdbId,
+          title: entry.title,
+          posterPath: entry.posterPath,
+          season: entry.season,
+          episode: entry.episode,
+          episodeTitle: entry.episodeTitle,
+          streamUrl: null,
+          streamReferer: null,
+        });
+      }
+    }
+
+    const queuedItems = downloadQueue.getAll();
+    for (const item of queuedItems) {
+      if (!this.activeDownloads.has(item.id)) {
+        itemsToRetry.push({
+          mediaType: item.mediaType,
+          tmdbId: item.tmdbId,
+          title: item.title,
+          posterPath: item.posterPath,
+          season: item.season,
+          episode: item.episode,
+          episodeTitle: item.episodeTitle,
+          streamUrl: null,
+          streamReferer: null,
+        });
+      }
+    }
+
+    this.activeDownloads.clear();
+    this.pendingFetches.clear();
+    await downloadQueue.clear();
+
+    for (const item of itemsToRetry) {
+      const downloadId = generateDownloadId(item.mediaType, item.tmdbId, item.season, item.episode);
+      await deleteDownload(downloadId);
+    }
+
+    for (const item of itemsToRetry) {
+      try {
+        await this.addToQueue(item);
+      } catch (error) {
+        // Skip items that fail to re-queue
+      }
+    }
+
+    this.notifyListeners('all-retried', { count: itemsToRetry.length });
+    return itemsToRetry.length;
   }
 
   async retryDownload(downloadId) {
@@ -324,8 +446,6 @@ class DownloadManager {
       queueItem.streamUrl = streamUrl;
       queueItem.streamReferer = streamReferer;
     }
-
-    this.processQueue();
   }
 
   async markAsWatched(downloadId) {
@@ -384,7 +504,7 @@ class DownloadManager {
       try {
         callback(event, data);
       } catch (error) {
-        console.error('DownloadManager listener error:', error);
+        // Listener error, ignore
       }
     });
   }
@@ -396,6 +516,7 @@ class DownloadManager {
     networkMonitor.stop();
     ffmpegConverter.destroy();
     this.activeDownloads.clear();
+    this.pendingFetches.clear();
     this.listeners.clear();
     this.isInitialized = false;
   }

@@ -21,7 +21,7 @@
     "babel-preset-expo": "~54.0.9",
     "cheerio": "1.0.0-rc.12",
     "expo": "~54.0.30",
-    "expo-background-fetch": "~14.0.9",
+    "expo-background-task": "~1.0.10",
     "expo-brightness": "~14.0.8",
     "expo-dev-client": "~6.0.20",
     "expo-file-system": "~19.0.21",

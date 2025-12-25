@@ -33,40 +33,34 @@ class DownloadQueue {
       this.items.sort((a, b) => new Date(a.queuedAt) - new Date(b.queuedAt));
       this.notifyListeners();
     } catch (error) {
-      console.error('DownloadQueue restore error:', error);
       this.items = [];
     }
   }
 
   async enqueue(mediaInfo) {
-    try {
-      const existingItem = this.items.find(item => item.id === mediaInfo.id);
-      if (existingItem) {
-        if (existingItem.status === DOWNLOAD_STATUS.FAILED) {
-          await this.remove(existingItem.id);
-        } else {
-          throw new Error('Item already in queue');
-        }
+    const existingItem = this.items.find(item => item.id === mediaInfo.id);
+    if (existingItem) {
+      if (existingItem.status === DOWNLOAD_STATUS.FAILED) {
+        await this.remove(existingItem.id);
+      } else {
+        throw new Error('Item already in queue');
       }
-
-      const entry = typeof mediaInfo.id === 'string' && mediaInfo.status
-        ? mediaInfo
-        : createDownloadEntry(mediaInfo);
-
-      entry.status = DOWNLOAD_STATUS.QUEUED;
-      entry.queuedAt = new Date().toISOString();
-      entry.retryCount = 0;
-      entry.errorMessage = null;
-
-      await saveDownloadEntry(entry);
-      this.items.push(entry);
-      this.notifyListeners();
-
-      return entry;
-    } catch (error) {
-      console.error('DownloadQueue enqueue error:', error);
-      throw error;
     }
+
+    const entry = typeof mediaInfo.id === 'string' && mediaInfo.status
+      ? mediaInfo
+      : createDownloadEntry(mediaInfo);
+
+    entry.status = DOWNLOAD_STATUS.QUEUED;
+    entry.queuedAt = new Date().toISOString();
+    entry.retryCount = 0;
+    entry.errorMessage = null;
+
+    await saveDownloadEntry(entry);
+    this.items.push(entry);
+    this.notifyListeners();
+
+    return entry;
   }
 
   async enqueueBatch(mediaInfoArray) {
@@ -76,7 +70,7 @@ class DownloadQueue {
         const entry = await this.enqueue(mediaInfo);
         entries.push(entry);
       } catch (error) {
-        console.error(`Failed to enqueue item:`, error);
+        // Skip items that fail to enqueue
       }
     }
     return entries;
@@ -127,7 +121,6 @@ class DownloadQueue {
       }
       return false;
     } catch (error) {
-      console.error('DownloadQueue updateStatus error:', error);
       return false;
     }
   }
@@ -146,7 +139,6 @@ class DownloadQueue {
       }
       return false;
     } catch (error) {
-      console.error('DownloadQueue updateProgress error:', error);
       return false;
     }
   }
@@ -173,7 +165,6 @@ class DownloadQueue {
       }
       return false;
     } catch (error) {
-      console.error('DownloadQueue markCompleted error:', error);
       return false;
     }
   }
@@ -198,7 +189,6 @@ class DownloadQueue {
       }
       return false;
     } catch (error) {
-      console.error('DownloadQueue markFailed error:', error);
       return false;
     }
   }
@@ -218,7 +208,6 @@ class DownloadQueue {
       this.notifyListeners();
       return true;
     } catch (error) {
-      console.error('DownloadQueue remove error:', error);
       return false;
     }
   }
@@ -232,7 +221,6 @@ class DownloadQueue {
       this.notifyListeners();
       return true;
     } catch (error) {
-      console.error('DownloadQueue clear error:', error);
       return false;
     }
   }
@@ -262,7 +250,7 @@ class DownloadQueue {
       try {
         callback(items);
       } catch (error) {
-        console.error('DownloadQueue listener error:', error);
+        // Listener error, ignore
       }
     });
   }

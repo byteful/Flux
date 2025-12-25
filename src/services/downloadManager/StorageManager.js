@@ -49,7 +49,6 @@ class StorageManager {
         status: result.status,
       };
     } catch (error) {
-      console.error('StorageManager downloadFile error:', error);
       return {
         success: false,
         error: error.message,
@@ -69,7 +68,6 @@ class StorageManager {
         status: result.status,
       };
     } catch (error) {
-      console.error('StorageManager downloadFileSimple error:', error);
       return {
         success: false,
         error: error.message,
@@ -85,7 +83,6 @@ class StorageManager {
       file.write(content);
       return true;
     } catch (error) {
-      console.error('StorageManager writeFile error:', error);
       return false;
     }
   }
@@ -98,7 +95,6 @@ class StorageManager {
       }
       return file.text();
     } catch (error) {
-      console.error('StorageManager readFile error:', error);
       return null;
     }
   }
@@ -111,7 +107,6 @@ class StorageManager {
       }
       return true;
     } catch (error) {
-      console.error('StorageManager deleteFile error:', error);
       return false;
     }
   }
@@ -124,7 +119,6 @@ class StorageManager {
       }
       return true;
     } catch (error) {
-      console.error('StorageManager deleteDirectory error:', error);
       return false;
     }
   }
@@ -134,7 +128,6 @@ class StorageManager {
       const file = new File(filePath);
       return file.exists;
     } catch (error) {
-      console.error('StorageManager fileExists error:', error);
       return false;
     }
   }
@@ -152,7 +145,6 @@ class StorageManager {
         isDirectory: false
       };
     } catch (error) {
-      console.error('StorageManager getFileInfo error:', error);
       return null;
     }
   }
@@ -166,7 +158,6 @@ class StorageManager {
       const contents = dir.list();
       return contents.map(item => item.name);
     } catch (error) {
-      console.error('StorageManager getDirectoryContents error:', error);
       return [];
     }
   }
@@ -190,14 +181,13 @@ class StorageManager {
               totalSize += file.size || 0;
             }
           } catch (e) {
-            console.warn('Error checking item:', itemPath, e);
+            // Skip items that can't be read
           }
         }
       }
 
       return totalSize;
     } catch (error) {
-      console.error('StorageManager getDirectorySize error:', error);
       return 0;
     }
   }
@@ -207,7 +197,6 @@ class StorageManager {
       const freeSpace = await LegacyFileSystem.getFreeDiskStorageAsync();
       return freeSpace;
     } catch (error) {
-      console.error('StorageManager getAvailableStorage error:', error);
       return 0;
     }
   }
@@ -217,7 +206,6 @@ class StorageManager {
       const totalSpace = await LegacyFileSystem.getTotalDiskCapacityAsync();
       return totalSpace;
     } catch (error) {
-      console.error('StorageManager getTotalStorage error:', error);
       return 0;
     }
   }
@@ -226,14 +214,13 @@ class StorageManager {
     try {
       const sourceFile = new File(sourcePath);
       const destFile = new File(destPath);
-      
+
       const dirPath = destPath.substring(0, destPath.lastIndexOf('/'));
       await ensureDirectoryExists(dirPath);
-      
+
       sourceFile.copy(destFile);
       return true;
     } catch (error) {
-      console.error('StorageManager copyFile error:', error);
       return false;
     }
   }
@@ -242,14 +229,13 @@ class StorageManager {
     try {
       const sourceFile = new File(sourcePath);
       const destFile = new File(destPath);
-      
+
       const dirPath = destPath.substring(0, destPath.lastIndexOf('/'));
       await ensureDirectoryExists(dirPath);
-      
+
       sourceFile.move(destFile);
       return true;
     } catch (error) {
-      console.error('StorageManager moveFile error:', error);
       return false;
     }
   }

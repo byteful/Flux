@@ -1,4 +1,4 @@
-import { FFmpegKit, FFmpegKitConfig, ReturnCode } from 'ffmpeg-kit-react-native';
+import { FFmpegKit, FFmpegKitConfig, ReturnCode, Level } from 'ffmpeg-kit-react-native';
 import { AppState } from 'react-native';
 import { File } from 'expo-file-system';
 import * as LegacyFileSystem from 'expo-file-system/legacy';
@@ -11,9 +11,12 @@ class FFmpegConverter {
     this.appStateSubscription = null;
     this.onProgressCallback = null;
     this.wasCancelledDueToBackground = false;
+    this.conversionQueue = [];
+    this.isProcessingQueue = false;
   }
 
   initialize() {
+    FFmpegKitConfig.setLogLevel(Level.AV_LOG_QUIET);
     this.appStateSubscription = AppState.addEventListener('change', this.handleAppStateChange);
   }
 
@@ -23,6 +26,7 @@ class FFmpegConverter {
       this.appStateSubscription = null;
     }
     this.cancelConversion();
+    this.conversionQueue = [];
   }
 
   handleAppStateChange = (nextAppState) => {
@@ -36,10 +40,39 @@ class FFmpegConverter {
   };
 
   async convertHLSToMP4(segmentsDir, outputPath, onProgress) {
-    if (this.isConverting) {
-      throw new Error('Conversion already in progress');
+    return new Promise((resolve, reject) => {
+      this.conversionQueue.push({
+        segmentsDir,
+        outputPath,
+        onProgress,
+        resolve,
+        reject
+      });
+      this.processQueue();
+    });
+  }
+
+  async processQueue() {
+    if (this.isProcessingQueue || this.conversionQueue.length === 0) {
+      return;
     }
 
+    this.isProcessingQueue = true;
+
+    while (this.conversionQueue.length > 0) {
+      const job = this.conversionQueue.shift();
+      try {
+        const result = await this.executeConversion(job.segmentsDir, job.outputPath, job.onProgress);
+        job.resolve(result);
+      } catch (error) {
+        job.reject(error);
+      }
+    }
+
+    this.isProcessingQueue = false;
+  }
+
+  async executeConversion(segmentsDir, outputPath, onProgress) {
     this.isConverting = true;
     this.wasCancelledDueToBackground = false;
     this.onProgressCallback = onProgress;
@@ -119,7 +152,6 @@ class FFmpegConverter {
         throw new Error('FFmpeg conversion failed: ' + (logs || 'Unknown error'));
       }
     } catch (error) {
-      console.error('[FFmpegConverter] Error:', error);
       this.isConverting = false;
       this.currentSessionId = null;
       throw error;
@@ -138,7 +170,6 @@ class FFmpegConverter {
         });
       return segmentFiles;
     } catch (error) {
-      console.error('[FFmpegConverter] Error reading segments directory:', error);
       return [];
     }
   }

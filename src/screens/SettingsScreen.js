@@ -59,6 +59,7 @@ const SettingsScreen = () => {
 
   // Download settings state
   const [wifiOnlyDownload, setWifiOnlyDownload] = useState(true);
+  const [maxConcurrentDownloads, setMaxConcurrentDownloads] = useState(3);
   const [autoDeleteWatched, setAutoDeleteWatched] = useState(false);
   const [autoDeleteUnwatchedDays, setAutoDeleteUnwatchedDays] = useState(14);
   const [downloadStorageUsed, setDownloadStorageUsed] = useState(0);
@@ -145,6 +146,7 @@ const SettingsScreen = () => {
         // Load download settings
         const downloadSettings = await getDownloadSettings();
         setWifiOnlyDownload(downloadSettings.wifiOnlyDownload);
+        setMaxConcurrentDownloads(downloadSettings.maxConcurrentDownloads);
         setAutoDeleteWatched(downloadSettings.autoDeleteWatchedDays > 0);
         setAutoDeleteUnwatchedDays(downloadSettings.autoDeleteUnwatchedDays);
 
@@ -389,6 +391,11 @@ const SettingsScreen = () => {
     }
   };
 
+  const handleMaxConcurrentDownloadsChange = async (value) => {
+    setMaxConcurrentDownloads(value);
+    await saveDownloadSettings({ maxConcurrentDownloads: value });
+  };
+
   const handleAutoDeleteWatchedToggle = async (value) => {
     setAutoDeleteWatched(value);
     const autoDeleteWatchedDays = value ? 1 : 0;
@@ -570,6 +577,38 @@ const SettingsScreen = () => {
                 trackColor={{ false: '#444', true: '#E50914' }}
                 thumbColor="#fff"
               />
+            </View>
+
+            {/* Concurrent downloads selector */}
+            <View style={styles.dataInfo}>
+              <Ionicons name="layers-outline" size={22} color="#888" style={styles.settingIcon} />
+              <View style={styles.watchHistoryContainer}>
+                <Text style={styles.settingTitle}>Concurrent Downloads</Text>
+                <Text style={styles.watchHistoryCount}>
+                  {maxConcurrentDownloads} {maxConcurrentDownloads === 1 ? 'download' : 'downloads'} at a time
+                </Text>
+              </View>
+            </View>
+            <View style={styles.autoDeleteOptionsRow}>
+              {[1, 2, 3, 5].map((count) => (
+                <TouchableOpacity
+                  key={count}
+                  style={[
+                    styles.autoDeleteOption,
+                    maxConcurrentDownloads === count && styles.autoDeleteOptionActive,
+                  ]}
+                  onPress={() => handleMaxConcurrentDownloadsChange(count)}
+                >
+                  <Text
+                    style={[
+                      styles.autoDeleteOptionText,
+                      maxConcurrentDownloads === count && styles.autoDeleteOptionTextActive,
+                    ]}
+                  >
+                    {count}
+                  </Text>
+                </TouchableOpacity>
+              ))}
             </View>
 
             {/* Delete after watching toggle */}

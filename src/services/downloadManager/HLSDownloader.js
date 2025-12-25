@@ -112,8 +112,6 @@ class HLSDownloader {
           }
         }
       } catch (conversionError) {
-        console.error('[HLSDownloader] MP4 conversion failed:', conversionError);
-
         const localM3u8Path = await this.createLocalPlaylist();
         const totalSize = await this.calculateTotalSize();
 
@@ -128,7 +126,6 @@ class HLSDownloader {
         }
       }
     } catch (error) {
-      console.error('HLSDownloader error:', error);
       if (this.onError && !this.isCancelled) {
         this.onError(error);
       }
@@ -233,7 +230,6 @@ class HLSDownloader {
       const basePath = baseUrl.substring(0, baseUrl.lastIndexOf('/') + 1);
       return basePath + relativeUrl;
     } catch (error) {
-      console.error('URL resolution error:', error);
       return relativeUrl;
     }
   }
@@ -283,7 +279,6 @@ class HLSDownloader {
         throw new Error(`Download failed with status ${result.status}`);
       } catch (error) {
         lastError = error;
-        console.warn(`Segment ${index} download attempt ${attempt + 1} failed:`, error.message);
         if (attempt < maxRetries - 1) {
           await this.delay(1000 * (attempt + 1));
         }

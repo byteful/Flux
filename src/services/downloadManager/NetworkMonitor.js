@@ -92,7 +92,7 @@ class NetworkMonitor {
       try {
         callback(this.state);
       } catch (error) {
-        console.error('NetworkMonitor subscriber error:', error);
+        // Subscriber error, ignore
       }
     });
   }
@@ -103,7 +103,6 @@ class NetworkMonitor {
       this.updateState(state);
       return this.state;
     } catch (error) {
-      console.error('NetworkMonitor refresh error:', error);
       return this.state;
     }
   }

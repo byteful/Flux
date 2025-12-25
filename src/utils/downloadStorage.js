@@ -12,7 +12,7 @@ const DOWNLOADS_BASE_DIR = new Directory(Paths.document, 'downloads');
 
 export const DEFAULT_DOWNLOAD_SETTINGS = {
   wifiOnlyDownload: true,
-  maxConcurrentDownloads: 2,
+  maxConcurrentDownloads: 1,
   autoDeleteUnwatchedDays: 14,
   autoDeleteWatchedDays: 0,
 };
@@ -45,7 +45,7 @@ export const ensureDirectoryExists = async (dirPath) => {
   try {
     const pathParts = dirPath.replace(LegacyFileSystem.documentDirectory, '').split('/').filter(Boolean);
     let currentDir = new Directory(Paths.document);
-    
+
     for (const part of pathParts) {
       currentDir = new Directory(currentDir, part);
       if (!currentDir.exists) {
@@ -54,7 +54,6 @@ export const ensureDirectoryExists = async (dirPath) => {
     }
     return true;
   } catch (error) {
-    console.error('Error creating directory:', error);
     return false;
   }
 };
@@ -78,7 +77,7 @@ export const initializeDownloadsDirectory = async () => {
       await LegacyFileSystem.makeDirectoryAsync(tvDir, { intermediates: true });
     }
   } catch (error) {
-    console.error('Error initializing downloads directory:', error);
+    // Initialization failed
   }
 };
 
@@ -89,7 +88,6 @@ export const saveDownloadSettings = async (settings) => {
     await AsyncStorage.setItem(DOWNLOAD_SETTINGS_KEY, JSON.stringify(newSettings));
     return true;
   } catch (error) {
-    console.error('Error saving download settings:', error);
     return false;
   }
 };
@@ -102,7 +100,6 @@ export const getDownloadSettings = async () => {
     }
     return DEFAULT_DOWNLOAD_SETTINGS;
   } catch (error) {
-    console.error('Error getting download settings:', error);
     return DEFAULT_DOWNLOAD_SETTINGS;
   }
 };
@@ -115,7 +112,6 @@ export const getDownloadsIndex = async () => {
     }
     return { version: 1, lastUpdated: new Date().toISOString(), downloads: {} };
   } catch (error) {
-    console.error('Error getting downloads index:', error);
     return { version: 1, lastUpdated: new Date().toISOString(), downloads: {} };
   }
 };
@@ -126,7 +122,6 @@ export const saveDownloadsIndex = async (index) => {
     await AsyncStorage.setItem(DOWNLOADS_INDEX_KEY, JSON.stringify(index));
     return true;
   } catch (error) {
-    console.error('Error saving downloads index:', error);
     return false;
   }
 };
@@ -136,7 +131,6 @@ export const getDownloadEntry = async (downloadId) => {
     const index = await getDownloadsIndex();
     return index.downloads[downloadId] || null;
   } catch (error) {
-    console.error('Error getting download entry:', error);
     return null;
   }
 };
@@ -148,7 +142,6 @@ export const saveDownloadEntry = async (entry) => {
     await saveDownloadsIndex(index);
     return true;
   } catch (error) {
-    console.error('Error saving download entry:', error);
     return false;
   }
 };
@@ -163,7 +156,6 @@ export const updateDownloadEntry = async (downloadId, updates) => {
     }
     return false;
   } catch (error) {
-    console.error('Error updating download entry:', error);
     return false;
   }
 };
@@ -178,7 +170,6 @@ export const removeDownloadEntry = async (downloadId) => {
     }
     return false;
   } catch (error) {
-    console.error('Error removing download entry:', error);
     return false;
   }
 };
@@ -188,7 +179,6 @@ export const getAllDownloads = async () => {
     const index = await getDownloadsIndex();
     return Object.values(index.downloads);
   } catch (error) {
-    console.error('Error getting all downloads:', error);
     return [];
   }
 };
@@ -198,7 +188,6 @@ export const getDownloadsByStatus = async (status) => {
     const downloads = await getAllDownloads();
     return downloads.filter(d => d.status === status);
   } catch (error) {
-    console.error('Error getting downloads by status:', error);
     return [];
   }
 };
@@ -216,7 +205,6 @@ export const getActiveDownloads = async () => {
       d.status === DOWNLOAD_STATUS.PAUSED
     );
   } catch (error) {
-    console.error('Error getting active downloads:', error);
     return [];
   }
 };
@@ -227,7 +215,6 @@ export const isDownloaded = async (mediaType, tmdbId, season = null, episode = n
     const entry = await getDownloadEntry(downloadId);
     return entry?.status === DOWNLOAD_STATUS.COMPLETED;
   } catch (error) {
-    console.error('Error checking if downloaded:', error);
     return false;
   }
 };
@@ -238,7 +225,6 @@ export const getDownloadStatus = async (mediaType, tmdbId, season = null, episod
     const entry = await getDownloadEntry(downloadId);
     return entry?.status || null;
   } catch (error) {
-    console.error('Error getting download status:', error);
     return null;
   }
 };
@@ -279,7 +265,6 @@ export const markAsWatched = async (downloadId) => {
     await updateDownloadEntry(downloadId, { lastWatchedAt: new Date().toISOString() });
     return true;
   } catch (error) {
-    console.error('Error marking as watched:', error);
     return false;
   }
 };
@@ -296,7 +281,6 @@ export const getDownloadStorageUsage = async () => {
     }
     return totalSize;
   } catch (error) {
-    console.error('Error getting download storage usage:', error);
     return 0;
   }
 };
@@ -342,7 +326,6 @@ export const deleteDownloadFiles = async (downloadId) => {
     }
     return true;
   } catch (error) {
-    console.error('Error deleting download files:', error);
     return false;
   }
 };
@@ -353,7 +336,6 @@ export const deleteDownload = async (downloadId) => {
     await removeDownloadEntry(downloadId);
     return true;
   } catch (error) {
-    console.error('Error deleting download:', error);
     return false;
   }
 };
@@ -373,7 +355,6 @@ export const clearAllDownloads = async () => {
     await AsyncStorage.removeItem(DOWNLOAD_QUEUE_KEY);
     return true;
   } catch (error) {
-    console.error('Error clearing all downloads:', error);
     return false;
   }
 };

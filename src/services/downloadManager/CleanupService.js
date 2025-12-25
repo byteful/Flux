@@ -1,4 +1,4 @@
-import * as BackgroundFetch from 'expo-background-fetch';
+import * as BackgroundTask from 'expo-background-task';
 import * as TaskManager from 'expo-task-manager';
 import {
   getAllDownloads,
@@ -8,6 +8,15 @@ import {
 } from '../../utils/downloadStorage';
 
 const CLEANUP_TASK_NAME = 'download-cleanup-task';
+
+TaskManager.defineTask(CLEANUP_TASK_NAME, async () => {
+  try {
+    await cleanupService.runCleanup();
+    return BackgroundTask.BackgroundTaskResult.Success;
+  } catch (error) {
+    return BackgroundTask.BackgroundTaskResult.Failed;
+  }
+});
 
 class CleanupService {
   constructor() {
@@ -19,99 +28,81 @@ class CleanupService {
       await this.registerBackgroundTask();
       this.isRegistered = true;
     } catch (error) {
-      console.error('CleanupService initialization error:', error);
+      // Initialization failed silently
     }
   }
 
   async registerBackgroundTask() {
-    TaskManager.defineTask(CLEANUP_TASK_NAME, async () => {
-      try {
-        await this.runCleanup();
-        return BackgroundFetch.BackgroundFetchResult.NewData;
-      } catch (error) {
-        console.error('Background cleanup task error:', error);
-        return BackgroundFetch.BackgroundFetchResult.Failed;
-      }
-    });
-
-    const status = await BackgroundFetch.getStatusAsync();
-    if (status === BackgroundFetch.BackgroundFetchStatus.Restricted ||
-        status === BackgroundFetch.BackgroundFetchStatus.Denied) {
-      console.warn('Background fetch is not available');
+    const status = await BackgroundTask.getStatusAsync();
+    if (status === BackgroundTask.BackgroundTaskStatus.Restricted ||
+        status === BackgroundTask.BackgroundTaskStatus.Denied) {
       return;
     }
 
     const isRegistered = await TaskManager.isTaskRegisteredAsync(CLEANUP_TASK_NAME);
     if (!isRegistered) {
-      await BackgroundFetch.registerTaskAsync(CLEANUP_TASK_NAME, {
-        minimumInterval: 60 * 60 * 24,
-        stopOnTerminate: false,
-        startOnBoot: true,
+      await BackgroundTask.registerTaskAsync(CLEANUP_TASK_NAME, {
+        minimumInterval: 60 * 24,
       });
     }
   }
 
   async runCleanup() {
-    try {
-      const settings = await getDownloadSettings();
-      const downloads = await getAllDownloads();
-      const now = new Date();
-      const deletedItems = [];
+    const settings = await getDownloadSettings();
+    const downloads = await getAllDownloads();
+    const now = new Date();
+    const deletedItems = [];
 
-      for (const download of downloads) {
-        if (download.status !== DOWNLOAD_STATUS.COMPLETED) {
-          continue;
-        }
+    for (const download of downloads) {
+      if (download.status !== DOWNLOAD_STATUS.COMPLETED) {
+        continue;
+      }
 
-        let shouldDelete = false;
-        let reason = '';
+      let shouldDelete = false;
+      let reason = '';
 
-        if (settings.autoDeleteWatchedDays > 0 && download.lastWatchedAt) {
-          const watchedDate = new Date(download.lastWatchedAt);
-          const daysSinceWatched = (now - watchedDate) / (1000 * 60 * 60 * 24);
+      if (settings.autoDeleteWatchedDays > 0 && download.lastWatchedAt) {
+        const watchedDate = new Date(download.lastWatchedAt);
+        const daysSinceWatched = (now - watchedDate) / (1000 * 60 * 60 * 24);
 
-          if (daysSinceWatched >= settings.autoDeleteWatchedDays) {
-            shouldDelete = true;
-            reason = 'watched';
-          }
-        }
-
-        if (!shouldDelete && settings.autoDeleteUnwatchedDays > 0 && !download.lastWatchedAt) {
-          const completedDate = new Date(download.completedAt || download.queuedAt);
-          const daysSinceDownload = (now - completedDate) / (1000 * 60 * 60 * 24);
-
-          if (daysSinceDownload >= settings.autoDeleteUnwatchedDays) {
-            shouldDelete = true;
-            reason = 'unwatched';
-          }
-        }
-
-        if (shouldDelete) {
-          try {
-            await deleteDownload(download.id);
-            deletedItems.push({ id: download.id, title: download.title, reason });
-          } catch (deleteError) {
-            console.error(`Failed to delete download ${download.id}:`, deleteError);
-          }
+        if (daysSinceWatched >= settings.autoDeleteWatchedDays) {
+          shouldDelete = true;
+          reason = 'watched';
         }
       }
 
-      return deletedItems;
-    } catch (error) {
-      console.error('CleanupService runCleanup error:', error);
-      throw error;
+      if (!shouldDelete && settings.autoDeleteUnwatchedDays > 0 && !download.lastWatchedAt) {
+        const completedDate = new Date(download.completedAt || download.queuedAt);
+        const daysSinceDownload = (now - completedDate) / (1000 * 60 * 60 * 24);
+
+        if (daysSinceDownload >= settings.autoDeleteUnwatchedDays) {
+          shouldDelete = true;
+          reason = 'unwatched';
+        }
+      }
+
+      if (shouldDelete) {
+        try {
+          await deleteDownload(download.id);
+          deletedItems.push({ id: download.id, title: download.title, reason });
+        } catch (deleteError) {
+          // Skip failed deletions
+        }
+      }
     }
+
+    return deletedItems;
   }
 
   async unregisterBackgroundTask() {
     try {
       const isRegistered = await TaskManager.isTaskRegisteredAsync(CLEANUP_TASK_NAME);
       if (isRegistered) {
-        await BackgroundFetch.unregisterTaskAsync(CLEANUP_TASK_NAME);
+        await BackgroundTask.unregisterTaskAsync(CLEANUP_TASK_NAME);
       }
       this.isRegistered = false;
     } catch (error) {
-      console.error('Error unregistering background task:', error);
+      // Unregister failed silently
     }
   }
 }

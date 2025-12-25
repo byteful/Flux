@@ -102,6 +102,43 @@ const DownloadsScreen = () => {
     await downloadManager.retryDownload(downloadId);
   };
 
+  const handleCancelAllAndRetry = () => {
+    Alert.alert(
+      'Restart All Downloads',
+      'This will cancel all active downloads and restart them from the beginning. Continue?',
+      [
+        { text: 'No', style: 'cancel' },
+        {
+          text: 'Restart All',
+          style: 'destructive',
+          onPress: async () => {
+            await downloadManager.cancelAllAndRetry();
+            loadData();
+          },
+        },
+      ]
+    );
+  };
+
+  const handleCancelAll = () => {
+    Alert.alert(
+      'Cancel All Downloads',
+      'Are you sure you want to cancel all downloads? This cannot be undone.',
+      [
+        { text: 'No', style: 'cancel' },
+        {
+          text: 'Cancel All',
+          style: 'destructive',
+          onPress: async () => {
+            await downloadManager.cancelAllDownloads();
+            setSelectedFilter('all');
+            loadData();
+          },
+        },
+      ]
+    );
+  };
+
   const handlePlay = async (item) => {
     let basePath;
     if (item.filePath.endsWith('.m3u8') || item.filePath.endsWith('.mp4')) {
@@ -166,7 +203,7 @@ const DownloadsScreen = () => {
     <SafeAreaView style={styles.container} edges={['top']}>
       <Animated.View style={[styles.animatedContainer, animatedStyle]}>
         <View style={styles.header}>
-          <Text style={styles.headerTitle}>Downloads</Text>
+          <Text style={styles.headerTitle}>Downloads (beta)</Text>
         </View>
 
         <ScrollView
@@ -194,7 +231,19 @@ const DownloadsScreen = () => {
 
           {activeDownloads.length > 0 && !showActiveTab && (
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Downloading</Text>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>Downloading</Text>
+                <View style={styles.headerButtons}>
+                  <TouchableOpacity style={styles.cancelAllButton} onPress={handleCancelAll}>
+                    <Ionicons name="close" size={14} color="#fff" />
+                    <Text style={styles.headerButtonText}>Cancel All</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.restartButton} onPress={handleCancelAllAndRetry}>
+                    <Ionicons name="refresh" size={14} color="#fff" />
+                    <Text style={styles.headerButtonText}>Restart All</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
               {activeDownloads.map(item => (
                 <DownloadProgressCard
                   key={item.id}
@@ -247,6 +296,16 @@ const DownloadsScreen = () => {
 
               {selectedFilter === 'active' ? (
                 <View style={styles.section}>
+                  <View style={styles.activeTabHeader}>
+                    <TouchableOpacity style={styles.cancelAllButton} onPress={handleCancelAll}>
+                      <Ionicons name="close" size={14} color="#fff" />
+                      <Text style={styles.headerButtonText}>Cancel All</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.restartButton} onPress={handleCancelAllAndRetry}>
+                      <Ionicons name="refresh" size={14} color="#fff" />
+                      <Text style={styles.headerButtonText}>Restart All</Text>
+                    </TouchableOpacity>
+                  </View>
                   {activeDownloads.map(item => (
                     <DownloadProgressCard
                       key={item.id}
@@ -339,13 +398,51 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#222',
   },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 15,
+    paddingTop: 15,
+    paddingBottom: 10,
+  },
   sectionTitle: {
     color: '#E50914',
     fontSize: 16,
     fontWeight: '600',
+  },
+  headerButtons: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  cancelAllButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#8B0000',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 4,
+  },
+  restartButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#333',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 4,
+  },
+  headerButtonText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '600',
+    marginLeft: 4,
+  },
+  activeTabHeader: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
     paddingHorizontal: 15,
-    paddingTop: 15,
-    paddingBottom: 10,
+    paddingTop: 10,
+    gap: 8,
   },
   tabContainer: {
     flexDirection: 'row',
