@@ -1,7 +1,7 @@
 {
   "name": "flux",
-  "version": "1.2.1-BETA",
-  "version-iteration": 9,
+  "version": "1.2.1",
+  "version-iteration": 10,
   "main": "index.js",
   "scripts": {
     "start": "expo start",
