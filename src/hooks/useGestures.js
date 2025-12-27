@@ -86,10 +86,10 @@ export const useGestures = ({
         player.seekBy(pendingSeekAmount.current);
         pendingSeekAmount.current = 0;
 
-        if (wasPlayingBeforeDoubleTapSeek.current) {
+        //if (wasPlayingBeforeDoubleTapSeek.current) {
           player.play();
-        }
-      }, 500);
+        //}
+      }, 200);
 
       leftSeekTimeoutRef.current = setTimeout(() => {
         Animated.timing(leftSeekOpacity, {
@@ -146,10 +146,10 @@ export const useGestures = ({
         player.seekBy(pendingSeekAmount.current);
         pendingSeekAmount.current = 0;
 
-        if (wasPlayingBeforeDoubleTapSeek.current) {
+        //if (wasPlayingBeforeDoubleTapSeek.current) {
           player.play();
-        }
-      }, 500);
+        //}
+      }, 200);
 
       rightSeekTimeoutRef.current = setTimeout(() => {
         Animated.timing(rightSeekOpacity, {

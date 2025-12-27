@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { TouchableOpacity, View, Text, StyleSheet, ActivityIndicator, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import Svg, { Circle } from 'react-native-svg';
+import Svg, { Circle, Path, Line } from 'react-native-svg';
 import downloadManager from '../services/downloadManager';
 import { generateDownloadId, DOWNLOAD_STATUS } from '../utils/downloadStorage';
 
@@ -32,6 +32,32 @@ const CircularProgress = ({ progress, size = 28, strokeWidth = 3, color = '#E509
         strokeLinecap="round"
         rotation="-90"
         origin={`${size / 2}, ${size / 2}`}
+      />
+    </Svg>
+  );
+};
+
+const NetflixDownloadIcon = ({ size = 24, color = '#fff' }) => {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24">
+      {/* Down arrow */}
+      <Path
+        d="M12 4 L12 16 M12 16 L8 12 M12 16 L16 12"
+        stroke={color}
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        fill="none"
+      />
+      {/* Flat line at bottom */}
+      <Line
+        x1="6"
+        y1="20"
+        x2="18"
+        y2="20"
+        stroke={color}
+        strokeWidth="2"
+        strokeLinecap="round"
       />
     </Svg>
   );
@@ -232,17 +258,17 @@ const DownloadButton = ({
   const getIconConfig = () => {
     switch (status) {
       case DOWNLOAD_STATUS.QUEUED:
-        return { name: 'hourglass-outline', color: '#FFA500' };
+        return { name: 'hourglass-outline', color: '#fff', useCustom: false };
       case DOWNLOAD_STATUS.DOWNLOADING:
-        return { name: 'pause-circle-outline', color: '#E50914' };
+        return { name: 'pause-circle-outline', color: '#fff', useCustom: false };
       case DOWNLOAD_STATUS.PAUSED:
-        return { name: 'play-circle-outline', color: '#FFA500' };
+        return { name: 'play-circle-outline', color: '#fff', useCustom: false };
       case DOWNLOAD_STATUS.COMPLETED:
-        return { name: 'checkmark-circle', color: '#4CAF50' };
+        return { name: 'checkmark-circle', color: '#4CAF50', useCustom: false };
       case DOWNLOAD_STATUS.FAILED:
-        return { name: 'alert-circle-outline', color: '#E50914' };
+        return { name: 'alert-circle-outline', color: '#E50914', useCustom: false };
       default:
-        return { name: 'download-outline', color: '#888' };
+        return { name: 'download-outline', color: '#fff', useCustom: true };
     }
   };
 
@@ -285,6 +311,8 @@ const DownloadButton = ({
           <View style={styles.progressContainer}>
             <CircularProgress progress={progress} size={28} strokeWidth={3} color="#E50914" />
           </View>
+        ) : iconConfig.useCustom ? (
+          <NetflixDownloadIcon size={iconSize} color={iconConfig.color} />
         ) : (
           <Ionicons name={iconConfig.name} size={iconSize} color={iconConfig.color} />
         )}
@@ -295,7 +323,11 @@ const DownloadButton = ({
   if (variant === 'compact') {
     return (
       <TouchableOpacity style={styles.compactButton} onPress={handlePress} activeOpacity={0.7}>
-        <Ionicons name={iconConfig.name} size={20} color={iconConfig.color} />
+        {iconConfig.useCustom ? (
+          <NetflixDownloadIcon size={20} color={iconConfig.color} />
+        ) : (
+          <Ionicons name={iconConfig.name} size={20} color={iconConfig.color} />
+        )}
       </TouchableOpacity>
     );
   }
@@ -308,6 +340,8 @@ const DownloadButton = ({
     >
       {status === DOWNLOAD_STATUS.DOWNLOADING ? (
         <ActivityIndicator size="small" color="#fff" />
+      ) : iconConfig.useCustom ? (
+        <NetflixDownloadIcon size={18} color={status === DOWNLOAD_STATUS.COMPLETED ? '#4CAF50' : '#fff'} />
       ) : (
         <Ionicons name={iconConfig.name} size={18} color={status === DOWNLOAD_STATUS.COMPLETED ? '#4CAF50' : '#fff'} />
       )}

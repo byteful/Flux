@@ -306,47 +306,59 @@ const DetailScreen = ({ route, navigation }) => {
         onPress={() => handleEpisodePress(item, isUnreleased)}
       >
         <View style={styles.episodeRow}>
-          <View style={[styles.episodeImageContainer, isUnreleased && styles.unreleasedEpisodeImageContainer]}>
-            {item.still_path ? (
-              <Image
-                source={{ uri: getImageUrl(item.still_path) }}
-                style={styles.episodeImage}
-              />
-            ) : (
-              <View style={styles.episodeImagePlaceholder} />
-            )}
-            {isUnreleased && (
-              <View style={styles.unreleasedBadgeDetailScreenContainer}>
-                <View style={styles.unreleasedBadgeDetailScreen}>
-                  <Text style={styles.unreleasedBadgeTextDetailScreen}>UNRELEASED</Text>
+          <View style={styles.episodeThumbnailColumn}>
+            <View style={[styles.episodeImageContainer, isUnreleased && styles.unreleasedEpisodeImageContainer]}>
+              {item.still_path ? (
+                <Image
+                  source={{ uri: getImageUrl(item.still_path) }}
+                  style={styles.episodeImage}
+                />
+              ) : (
+                <View style={styles.episodeImagePlaceholder} />
+              )}
+              {/* Play button overlay */}
+              <View style={styles.playButtonOverlay}>
+                <View style={styles.playButtonCircle}>
+                  <Ionicons name="play" size={20} color="#fff" />
                 </View>
               </View>
-            )}
-            {progressPercent > 0 && progressPercent < 1 && (
-              <View style={styles.progressBarContainer}>
-                <View style={[styles.progressBar, { width: `${progressPercent * 100}%` }]} />
-              </View>
-            )}
+              {isUnreleased && (
+                <View style={styles.unreleasedBadgeDetailScreenContainer}>
+                  <View style={styles.unreleasedBadgeDetailScreen}>
+                    <Text style={styles.unreleasedBadgeTextDetailScreen}>UNRELEASED</Text>
+                  </View>
+                </View>
+              )}
+              {progressPercent > 0 && progressPercent < 1 && (
+                <View style={styles.progressBarContainer}>
+                  <View style={[styles.progressBar, { width: `${progressPercent * 100}%` }]} />
+                </View>
+              )}
+            </View>
+            <Text style={styles.episodeRuntime}>{formatRuntime(item.runtime)}</Text>
           </View>
-          <View style={styles.episodeInfo}>
-            <Text style={styles.episodeNumber}>Episode {item.episode_number}</Text>
-            <Text style={[styles.episodeTitle, isUnreleased && styles.unreleasedEpisodeText]}>{item.name}</Text>
-            <Text style={[styles.episodeOverview, isUnreleased && styles.unreleasedEpisodeText]} numberOfLines={2}>
+          <View style={styles.episodeInfoColumn}>
+            <Text style={[styles.episodeTitle, isUnreleased && styles.unreleasedEpisodeText]}>
+              {item.episode_number}. {item.name}
+            </Text>
+            <Text style={[styles.episodeOverview, isUnreleased && styles.unreleasedEpisodeText]} numberOfLines={3}>
               {item.overview || 'No description available.'}
             </Text>
           </View>
           {!isUnreleased && (
-            <DownloadButton
-              variant="icon"
-              size="medium"
-              mediaId={mediaId}
-              mediaType="tv"
-              season={selectedSeason}
-              episode={item.episode_number}
-              title={details.name}
-              episodeTitle={item.name}
-              posterPath={details.poster_path}
-            />
+            <View style={styles.downloadButtonContainer}>
+              <DownloadButton
+                variant="icon"
+                size="medium"
+                mediaId={mediaId}
+                mediaType="tv"
+                season={selectedSeason}
+                episode={item.episode_number}
+                title={details.name}
+                episodeTitle={item.name}
+                posterPath={details.poster_path}
+              />
+            </View>
           )}
         </View>
       </TouchableOpacity>
@@ -357,12 +369,15 @@ const DetailScreen = ({ route, navigation }) => {
   const releaseDate = mediaType === 'tv' ? details.first_air_date : details.release_date;
   const releaseYear = releaseDate ? releaseDate.split('-')[0] : 'Unknown';
 
-  // Format runtime (for movies)
+  // Format runtime (for movies and episodes)
   const formatRuntime = (minutes) => {
     if (!minutes) return '';
     const hrs = Math.floor(minutes / 60);
     const mins = minutes % 60;
-    return `${hrs}h ${mins}m`;
+    if (hrs > 0) {
+      return `${hrs}h ${mins}m`;
+    }
+    return `${mins}m`;
   };
 
   // Process genres
@@ -539,7 +554,8 @@ const DetailScreen = ({ route, navigation }) => {
                           {totalEpisodesInSeason === 1 ? 'Episode' : 'Episodes'}
                         </Text>
                         <DownloadButton
-                          variant="compact"
+                          variant="icon"
+                          size='medium'
                           isSeasonDownload={true}
                           mediaId={mediaId}
                           mediaType="tv"
@@ -873,7 +889,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 0, // Add horizontal padding to section titles
   },
   episodeItem: {
-    marginBottom: 15,
+    marginBottom: 25,
     borderBottomWidth: 1,
     borderBottomColor: '#222',
     paddingBottom: 15,
@@ -882,13 +898,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
   },
-  episodeImageContainer: { // New container for image and progress bar
+  episodeThumbnailColumn: {
+    marginRight: 12,
+    alignItems: 'center',
+  },
+  episodeImageContainer: {
     width: 120,
     height: 70,
     borderRadius: 4,
-    marginRight: 12,
-    position: 'relative', // For absolute positioning of progress bar
-    overflow: 'hidden', // Ensures progress bar doesn't exceed image bounds
+    marginBottom: 6,
+    position: 'relative',
+    overflow: 'hidden',
   },
   episodeImage: {
     width: '100%',
@@ -901,17 +921,37 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  playButtonOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  playButtonCircle: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    borderColor: 'rgb(100, 100, 100)',
+    borderWidth: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingLeft: 2,
+  },
   progressBarContainer: {
     position: 'absolute',
     bottom: 0,
     left: 0,
     right: 0,
-    height: 5, // Height of the progress bar
-    backgroundColor: 'rgb(75, 75, 75)', // Semi-transparent background for the bar container
+    height: 5,
+    backgroundColor: 'rgb(75, 75, 75)',
   },
   progressBar: {
     height: '100%',
-    backgroundColor: '#E50914', // Netflix red
+    backgroundColor: '#E50914',
   },
   watchedOverlay: {
     position: 'absolute',
@@ -923,24 +963,29 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  episodeInfo: {
+  episodeInfoColumn: {
     flex: 1,
     justifyContent: 'center',
+    marginRight: 8,
   },
-  episodeNumber: {
-    color: '#aaa',
-    fontSize: 13, // Slightly larger
-    marginBottom: 3,
+  downloadButtonContainer: {
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   episodeTitle: {
-    color: '#fff',
-    fontSize: 15, // Slightly smaller
+    color: '#d4d4d4',
+    fontSize: 15,
     fontWeight: '600',
     marginBottom: 4,
   },
+  episodeRuntime: {
+    color: '#8c8c8c',
+    fontSize: 13,
+    textAlign: 'center',
+  },
   episodeOverview: {
-    color: '#888',
-    fontSize: 13, // Slightly larger
+    color: '#8c8c8c',
+    fontSize: 13,
     lineHeight: 18,
   },
   loadMoreButton: {

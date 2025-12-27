@@ -159,12 +159,7 @@ const VideoControlsOverlay = ({
             <>
               <View style={styles.progressBar} ref={progressBarRef}>
                 <View style={[styles.progressFill, { width: `${progressPercent}%` }]} />
-                {isSeeking && seekPreviewPosition !== null && (
-                  <View style={[styles.seekThumb, { left: `${progressPercent}%` }]} />
-                )}
-                {!isSeeking && (
-                  <View style={[styles.progressThumb, { left: `${progressPercent}%` }]} />
-                )}
+                <View style={[styles.progressThumb, { left: `${progressPercent}%` }]} />
                 <View style={styles.progressTouchArea} {...(showControls ? progressPanResponder.panHandlers : {})} />
               </View>
               <Text style={styles.timeText}>{formatTime(-timeRemaining, true)}</Text>
@@ -243,6 +238,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     flexDirection: 'row',
+    gap: 30,
   },
   playPauseButton: {
     borderRadius: 50,
@@ -260,40 +256,46 @@ const styles = StyleSheet.create({
     right: 0,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 10,
+    paddingHorizontal: -10,
+    paddingVertical: 20,
+    gap: 10,
   },
   progressBar: {
     flex: 1,
     height: 6,
     backgroundColor: 'rgba(255, 255, 255, 0.3)',
-    marginHorizontal: 13,
-    borderRadius: 2,
-    overflow: 'hidden',
+    marginHorizontal: 8,
+    borderRadius: 3,
+    overflow: 'visible',
   },
   progressFill: {
     height: '100%',
     backgroundColor: '#E50914',
-    borderRadius: 2,
+    borderRadius: 3,
   },
   progressThumb: {
     position: 'absolute',
-    top: -5,
-    width: 14,
-    height: 14,
-    borderRadius: 7,
+    top: -9,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
     backgroundColor: '#E50914',
-    transform: [{ translateX: -7 }],
+    transform: [{ translateX: -12 }],
     zIndex: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.5,
+    shadowRadius: 4,
+    elevation: 5,
   },
   seekThumb: {
     position: 'absolute',
-    top: -6,
-    width: 16,
-    height: 16,
-    borderRadius: 8,
+    top: -9,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
     backgroundColor: '#E50914',
-    transform: [{ translateX: -8 }],
+    transform: [{ translateX: -13 }],
     zIndex: 3,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
@@ -311,8 +313,8 @@ const styles = StyleSheet.create({
   },
   timeText: {
     color: '#fff',
-    fontSize: 14,
-    minWidth: 40,
+    fontSize: 16,
+    minWidth: 45,
     textAlign: 'center',
   },
 });

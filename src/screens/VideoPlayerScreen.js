@@ -361,6 +361,14 @@ const VideoPlayerScreen = ({ route }) => {
       } else {
         player.timeUpdateEventInterval = 1000;
       }
+      
+      player.bufferOptions = {
+        preferredForwardBufferDuration: 3600,
+        maxBufferBytes: null,
+        minBufferForPlayback: 2,
+        prioritizeTimeOverSizeThreshold: true,
+        waitsToMinimizeStalling: false,
+      };
     }
   }, [player, videoUrl, showControls, subtitlesEnabled]);
 

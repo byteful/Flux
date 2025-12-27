@@ -10,8 +10,16 @@ import {
 import { buildStreamHeaders } from '../utils/streamHeaders';
 import { isFutureDate } from '../utils/timeUtils';
 import downloadManager from '../services/downloadManager';
-import { generateDownloadId } from '../utils/downloadStorage';
+import { generateDownloadId, getDownloadEntry, DOWNLOAD_STATUS } from '../utils/downloadStorage';
 import * as LegacyFileSystem from 'expo-file-system/legacy';
+
+const getBufferOptions = () => ({
+  preferredForwardBufferDuration: 3600,
+  maxBufferBytes: null,
+  minBufferForPlayback: 2,
+  prioritizeTimeOverSizeThreshold: true,
+  waitsToMinimizeStalling: false,
+});
 
 export const useStreamExtraction = ({
   mediaId,
@@ -73,7 +81,11 @@ export const useStreamExtraction = ({
         setCurrentWebViewConfig(null);
         setCurrentAttemptingSource(null);
         setIsLiveStream(true);
-        player.replaceAsync({ uri: streamUrl, headers: buildStreamHeaders(streamUrl, null) });
+        player.replaceAsync({ 
+          uri: streamUrl, 
+          headers: buildStreamHeaders(streamUrl, null),
+          bufferOptions: getBufferOptions(),
+        });
       },
       (err, sourceName) => {
         if (!isMountedRef.current) return;
@@ -123,7 +135,11 @@ export const useStreamExtraction = ({
         setCaptchaUrl(null);
         setCurrentWebViewConfig(null);
         setCurrentAttemptingSource(null);
-        player.replaceAsync({ uri: streamUrl, headers: buildStreamHeaders(streamUrl, referer) });
+        player.replaceAsync({ 
+          uri: streamUrl, 
+          headers: buildStreamHeaders(streamUrl, referer),
+          bufferOptions: getBufferOptions(),
+        });
         if (onFindSubtitles) onFindSubtitles();
       },
       (err, sourceName) => {
@@ -192,7 +208,7 @@ export const useStreamExtraction = ({
         }
 
         setVideoUrl(normalizedPath);
-        setCurrentPlayingSourceName('Offline');
+        setCurrentPlayingSourceName('Downloads');
         setStreamExtractionComplete(true);
 
         const isHLS = normalizedPath.endsWith('.m3u8');
@@ -201,6 +217,7 @@ export const useStreamExtraction = ({
           await player.replaceAsync({
             uri: normalizedPath,
             contentType: isHLS ? 'hls' : 'progressive',
+            bufferOptions: getBufferOptions(),
           });
         } catch (playerErr) {
           console.error('[useStreamExtraction] Offline playback error:', playerErr.message);
@@ -216,6 +233,69 @@ export const useStreamExtraction = ({
         } catch (cleanupErr) {
           console.warn('[useStreamExtraction] Failed to clean up missing download entry:', cleanupErr);
         }
+      }
+    }
+
+    const downloadId = generateDownloadId(mediaType, mediaId, season, episode);
+    const downloadEntry = await getDownloadEntry(downloadId);
+    const hasDownload = downloadEntry?.status === DOWNLOAD_STATUS.COMPLETED;
+
+    if (hasDownload && downloadEntry.filePath) {
+      let videoFilePath = null;
+      
+      try {
+        const pathToCheck = downloadEntry.filePath.replace('file://', '');
+        const fileInfo = await LegacyFileSystem.getInfoAsync(pathToCheck);
+        
+        if (fileInfo.exists) {
+          if (fileInfo.isDirectory) {
+            const files = await LegacyFileSystem.readDirectoryAsync(pathToCheck);
+            const videoFile = files.find(file => 
+              file.endsWith('.mp4') || file.endsWith('.m3u8')
+            );
+            
+            if (videoFile) {
+              videoFilePath = downloadEntry.filePath.endsWith('/') 
+                ? `${downloadEntry.filePath}${videoFile}`
+                : `${downloadEntry.filePath}/${videoFile}`;
+            }
+          } else {
+            videoFilePath = downloadEntry.filePath;
+          }
+        }
+      } catch (err) {
+        console.warn('[useStreamExtraction] Error checking download:', err);
+      }
+
+      if (videoFilePath) {
+        const normalizedPath = videoFilePath.startsWith('file://')
+          ? videoFilePath
+          : `file://${videoFilePath}`;
+
+        if (checkSavedProgress) await checkSavedProgress();
+        if (loadAutoPlaySetting) {
+          const isAutoPlayEnabled = await loadAutoPlaySetting();
+          if (isMountedRef.current && setAutoPlayEnabled) setAutoPlayEnabled(isAutoPlayEnabled);
+        }
+
+        setVideoUrl(normalizedPath);
+        setCurrentPlayingSourceName('Downloads');
+        setStreamExtractionComplete(true);
+
+        const isHLS = normalizedPath.endsWith('.m3u8');
+
+        try {
+          await player.replaceAsync({
+            uri: normalizedPath,
+            contentType: isHLS ? 'hls' : 'progressive',
+            bufferOptions: getBufferOptions(),
+          });
+        } catch (playerErr) {
+          console.error('[useStreamExtraction] Downloaded file playback error:', playerErr.message);
+        }
+
+        downloadManager.markAsWatched(downloadId);
+        return;
       }
     }
 
@@ -236,7 +316,11 @@ export const useStreamExtraction = ({
       setStreamReferer(cachedStreamData.referer);
       setCurrentPlayingSourceName(cachedStreamData.sourceName);
       setStreamExtractionComplete(true);
-      player.replaceAsync({ uri: cachedStreamData.url, headers: buildStreamHeaders(cachedStreamData.url, cachedStreamData.referer) });
+      player.replaceAsync({ 
+        uri: cachedStreamData.url, 
+        headers: buildStreamHeaders(cachedStreamData.url, cachedStreamData.referer),
+        bufferOptions: getBufferOptions(),
+      });
       if (onFindSubtitles) onFindSubtitles();
     } else if (isMountedRef.current) {
       setupStreamExtraction(isMountedRef);
@@ -253,14 +337,72 @@ export const useStreamExtraction = ({
     }
 
     const sources = getActiveStreamSources();
-    setAvailableSourcesList(sources);
+    
+    const downloadId = generateDownloadId(mediaType, mediaId, season, episode);
+    const downloadEntry = await getDownloadEntry(downloadId);
+    const hasDownload = downloadEntry?.status === DOWNLOAD_STATUS.COMPLETED;
+
+    let allSources = [...sources];
+    let downloadsSourceAdded = false;
+    
+    if (isOffline && offlineFilePath) {
+      allSources = [
+        {
+          name: 'Downloads',
+          isDownload: true,
+          filePath: offlineFilePath,
+        },
+        ...sources
+      ];
+      downloadsSourceAdded = true;
+    } else if (hasDownload && downloadEntry.filePath) {
+      let videoFilePath = null;
+      
+      try {
+        const pathToCheck = downloadEntry.filePath.replace('file://', '');
+        const fileInfo = await LegacyFileSystem.getInfoAsync(pathToCheck);
+        
+        if (fileInfo.exists) {
+          if (fileInfo.isDirectory) {
+            const files = await LegacyFileSystem.readDirectoryAsync(pathToCheck);
+            const videoFile = files.find(file => 
+              file.endsWith('.mp4') || file.endsWith('.m3u8')
+            );
+            
+            if (videoFile) {
+              videoFilePath = downloadEntry.filePath.endsWith('/') 
+                ? `${downloadEntry.filePath}${videoFile}`
+                : `${downloadEntry.filePath}/${videoFile}`;
+            }
+          } else {
+            videoFilePath = downloadEntry.filePath;
+          }
+        }
+      } catch (err) {
+        console.warn('[useStreamExtraction] Error checking download for modal:', err);
+      }
+
+      if (videoFilePath) {
+        allSources = [
+          {
+            name: 'Downloads',
+            isDownload: true,
+            filePath: videoFilePath,
+          },
+          ...sources
+        ];
+        downloadsSourceAdded = true;
+      }
+    }
+
+    setAvailableSourcesList(allSources);
 
     const initialStatus = {};
-    sources.forEach(s => { initialStatus[s.name] = 'idle'; });
+    allSources.forEach(s => { initialStatus[s.name] = 'idle'; });
     setSourceAttemptStatus(initialStatus);
 
     setShowSourceSelectionModal(true);
-  }, [player]);
+  }, [player, mediaType, mediaId, season, episode, isOffline, offlineFilePath]);
 
   const handleSelectSourceFromModal = useCallback(async (selectedSourceInfo, position, isUnmounting, setShowControls) => {
     if (isChangingSource || !player) return;
@@ -274,6 +416,51 @@ export const useStreamExtraction = ({
       try {
         await player.pause();
       } catch (e) { console.warn("Error pausing video on source select:", e); }
+    }
+
+    if (selectedSourceInfo.isDownload && selectedSourceInfo.filePath) {
+      const normalizedPath = selectedSourceInfo.filePath.startsWith('file://')
+        ? selectedSourceInfo.filePath
+        : `file://${selectedSourceInfo.filePath}`;
+
+      setVideoUrl(normalizedPath);
+      setCurrentPlayingSourceName('Downloads');
+      setStreamExtractionComplete(true);
+      setStreamReferer(null);
+
+      const isHLS = normalizedPath.endsWith('.m3u8');
+
+      try {
+        await player.replaceAsync({
+          uri: normalizedPath,
+          contentType: isHLS ? 'hls' : 'progressive',
+          bufferOptions: getBufferOptions(),
+        });
+        
+        setTimeout(() => {
+          if (player && currentPositionToResume > 0) {
+            player.currentTime = currentPositionToResume;
+          }
+        }, 500);
+
+        const downloadId = generateDownloadId(mediaType, mediaId, season, episode);
+        downloadManager.markAsWatched(downloadId);
+
+        setSourceAttemptStatus(prev => ({ ...prev, [selectedSourceInfo.name]: 'success' }));
+        setIsChangingSource(false);
+        setShowSourceSelectionModal(false);
+        setManualWebViewVisible(false);
+        setCaptchaUrl(null);
+        setCurrentWebViewConfig(null);
+        setCurrentAttemptingSource(null);
+        onError(null);
+      } catch (playerErr) {
+        console.error('[useStreamExtraction] Downloaded file playback error:', playerErr.message);
+        setSourceAttemptStatus(prev => ({ ...prev, [selectedSourceInfo.name]: 'failed' }));
+        setIsChangingSource(false);
+      }
+      
+      return;
     }
 
     if (contentId) {
@@ -301,7 +488,11 @@ export const useStreamExtraction = ({
       setCurrentPlayingSourceName(sourceName);
       setVideoUrl(streamUrl);
       setStreamExtractionComplete(true);
-      player.replaceAsync({ uri: streamUrl, headers: buildStreamHeaders(streamUrl, referer) });
+      player.replaceAsync({ 
+        uri: streamUrl, 
+        headers: buildStreamHeaders(streamUrl, referer),
+        bufferOptions: getBufferOptions(),
+      });
       setTimeout(() => {
         if (player && currentPositionToResume > 0) {
           player.currentTime = currentPositionToResume;
