@@ -21,6 +21,9 @@ class HLSDownloader {
     this.contentDir = entry.filePath;
     this.segmentsDir = `${this.contentDir}segments/`;
     this.totalBytesDownloaded = 0;
+    this.concurrentDownloads = 5;
+    this.failedSegments = [];
+    this.lastProgressTime = Date.now();
   }
 
   async start() {
@@ -37,32 +40,23 @@ class HLSDownloader {
       if (this.isCancelled) return;
 
       const parsedPlaylist = this.parsePlaylist(playlistContent, this.entry.streamUrl);
-      console.log(`[HLSDownloader] Initial playlist: isMaster=${parsedPlaylist.isMaster}, variants=${parsedPlaylist.variants.length}, segments=${parsedPlaylist.segments.length}`);
 
       let variantParsed;
       let playlistInfo;
       if (parsedPlaylist.isMaster) {
-        console.log(`[HLSDownloader] Master playlist detected with ${parsedPlaylist.variants.length} variants`);
-        parsedPlaylist.variants.forEach((v, i) => {
-          console.log(`[HLSDownloader]   Variant ${i}: bandwidth=${v.bandwidth}, resolution=${v.resolution}`);
-        });
-
         const selectedVariant = this.selectBestVariant(parsedPlaylist.variants);
         if (!selectedVariant) {
           throw new Error('No suitable video quality found in master playlist');
         }
-        console.log(`[HLSDownloader] Selected variant: bandwidth=${selectedVariant.bandwidth}, resolution=${selectedVariant.resolution}`);
 
         const variantContent = await this.fetchPlaylist(selectedVariant.url);
         if (this.isCancelled) return;
 
         variantParsed = this.parsePlaylist(variantContent, selectedVariant.url);
-        console.log(`[HLSDownloader] Variant playlist: segments=${variantParsed.segments.length}, isVOD=${variantParsed.isVOD}, duration=${variantParsed.totalDuration}s`);
         this.segments = variantParsed.segments;
         this.initSegment = variantParsed.initSegment;
         playlistInfo = variantParsed;
       } else {
-        console.log(`[HLSDownloader] Direct media playlist (not master)`);
         this.segments = parsedPlaylist.segments;
         this.initSegment = parsedPlaylist.initSegment;
         playlistInfo = parsedPlaylist;
@@ -70,13 +64,6 @@ class HLSDownloader {
 
       this.totalSegments = this.segments.length;
       const expectedDurationMinutes = Math.round(playlistInfo.totalDuration / 60);
-
-      console.log(`[HLSDownloader] Playlist info: ${this.totalSegments} segments, ~${expectedDurationMinutes} minutes, VOD: ${playlistInfo.isVOD}`);
-      console.log(`[HLSDownloader] Total duration: ${playlistInfo.totalDuration} seconds`);
-      console.log(`[HLSDownloader] First segment URL: ${this.segments[0]?.url?.substring(0, 100)}...`);
-      if (this.segments.length > 1) {
-        console.log(`[HLSDownloader] Last segment URL: ${this.segments[this.segments.length - 1]?.url?.substring(0, 100)}...`);
-      }
 
       if (this.totalSegments === 0) {
         throw new Error('No segments found in playlist');
@@ -98,15 +85,9 @@ class HLSDownloader {
         if (this.isCancelled) return;
       }
 
+      // Pre-process byte ranges
       let lastByteRangeEnd = 0;
       for (let i = 0; i < this.segments.length; i++) {
-        if (this.isCancelled) return;
-
-        while (this.isPaused) {
-          await this.delay(500);
-          if (this.isCancelled) return;
-        }
-
         const segment = this.segments[i];
         if (segment.byteRange && segment.byteRange.offset === null) {
           segment.byteRange.offset = lastByteRangeEnd;
@@ -114,12 +95,20 @@ class HLSDownloader {
         if (segment.byteRange) {
           lastByteRangeEnd = segment.byteRange.offset + segment.byteRange.length;
         }
+      }
 
-        await this.downloadSegment(segment, i);
-        this.downloadedSegments++;
+      // Download segments concurrently in batches
+      await this.downloadSegmentsConcurrently();
 
-        const progress = 5 + ((this.downloadedSegments / this.totalSegments) * 90);
-        this.reportProgress(progress, 'downloading');
+      // Log any failed segments
+      if (this.failedSegments.length > 0) {
+        console.warn(`[HLSDownloader] ${this.failedSegments.length} segments failed to download: ${this.failedSegments.slice(0, 10).join(', ')}${this.failedSegments.length > 10 ? '...' : ''}`);
+      }
+
+      // Check if too many segments failed
+      const failureRate = this.failedSegments.length / this.totalSegments;
+      if (failureRate > 0.1) {
+        throw new Error(`Too many segments failed to download (${this.failedSegments.length}/${this.totalSegments}). The stream source may be unavailable.`);
       }
 
       if (this.isCancelled) return;
@@ -374,7 +363,8 @@ class HLSDownloader {
     const filename = 'init.mp4';
     const filePath = `${this.segmentsDir}${filename}`;
 
-    const maxRetries = 3;
+    const maxRetries = 5;
+    const timeoutMs = 15000;
     let lastError = null;
 
     for (let attempt = 0; attempt < maxRetries; attempt++) {
@@ -390,7 +380,12 @@ class HLSDownloader {
           }
         }
 
-        const result = await LegacyFileSystem.downloadAsync(this.initSegment.url, filePath, { headers });
+        const result = await this.downloadWithTimeout(
+          this.initSegment.url,
+          filePath,
+          headers,
+          timeoutMs
+        );
 
         if (result.status >= 200 && result.status < 300) {
           const file = new File(filePath);
@@ -425,15 +420,93 @@ class HLSDownloader {
     return null;
   }
 
-  async downloadSegment(segment, index) {
+  async downloadWithTimeout(url, filePath, headers, timeoutMs) {
+    const downloadPromise = LegacyFileSystem.downloadAsync(url, filePath, { headers });
+
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => {
+        reject(new Error(`Download timeout after ${timeoutMs}ms`));
+      }, timeoutMs);
+    });
+
+    return Promise.race([downloadPromise, timeoutPromise]);
+  }
+
+  async downloadSegmentsConcurrently() {
+    const segmentIndices = Array.from({ length: this.segments.length }, (_, i) => i);
+    let currentIndex = 0;
+    let activeDownloads = 0;
+    let lastLoggedProgress = 0;
+    const startTime = Date.now();
+
+    return new Promise((resolve, reject) => {
+      const processNext = async () => {
+        while (this.isPaused) {
+          await this.delay(500);
+          if (this.isCancelled) {
+            resolve();
+            return;
+          }
+        }
+
+        if (this.isCancelled) {
+          resolve();
+          return;
+        }
+
+        if (currentIndex >= segmentIndices.length && activeDownloads === 0) {
+          resolve();
+          return;
+        }
+
+        while (activeDownloads < this.concurrentDownloads && currentIndex < segmentIndices.length) {
+          if (this.isCancelled) {
+            resolve();
+            return;
+          }
+
+          const segmentIndex = segmentIndices[currentIndex];
+          currentIndex++;
+          activeDownloads++;
+
+          this.downloadSegmentWithRetry(this.segments[segmentIndex], segmentIndex)
+            .then(() => {
+              this.downloadedSegments++;
+              this.lastProgressTime = Date.now();
+
+              const progress = 5 + ((this.downloadedSegments / this.totalSegments) * 90);
+              this.reportProgress(progress, 'downloading');
+            })
+            .catch((error) => {
+              this.failedSegments.push(segmentIndex);
+              console.error(`[HLSDownloader] Segment ${segmentIndex} permanently failed: ${error.message}`);
+            })
+            .finally(() => {
+              activeDownloads--;
+              processNext();
+            });
+        }
+      };
+
+      // Start initial batch of downloads
+      processNext();
+    });
+  }
+
+  async downloadSegmentWithRetry(segment, index) {
     const extension = segment.byteRange ? '.m4s' : '.ts';
     const filename = `segment_${String(index).padStart(5, '0')}${extension}`;
     const filePath = `${this.segmentsDir}${filename}`;
 
-    const maxRetries = 3;
+    const maxRetries = 5;
+    const timeoutMs = 15000;
     let lastError = null;
 
     for (let attempt = 0; attempt < maxRetries; attempt++) {
+      if (this.isCancelled) {
+        throw new Error('Download cancelled');
+      }
+
       try {
         const headers = {};
         if (this.entry.streamReferer) {
@@ -445,7 +518,12 @@ class HLSDownloader {
           headers['Range'] = `bytes=${start}-${end}`;
         }
 
-        const result = await LegacyFileSystem.downloadAsync(segment.url, filePath, { headers });
+        const result = await this.downloadWithTimeout(
+          segment.url,
+          filePath,
+          headers,
+          timeoutMs
+        );
 
         if (result.status >= 200 && result.status < 300) {
           const file = new File(filePath);
@@ -455,18 +533,44 @@ class HLSDownloader {
             segment.localFilename = filename;
             return;
           }
+          throw new Error('Downloaded file is empty or missing');
         }
 
-        throw new Error(`Download failed with status ${result.status}`);
+        if (result.status === 403 || result.status === 401) {
+          throw new Error(`Access denied (${result.status}) - stream may have expired`);
+        }
+
+        if (result.status === 429) {
+          console.warn(`[HLSDownloader] Rate limited on segment ${index}, waiting before retry...`);
+          await this.delay(2000 * (attempt + 1));
+        }
+
+        throw new Error(`HTTP ${result.status}`);
       } catch (error) {
         lastError = error;
+        const isTimeout = error.message.includes('timeout') || error.message.includes('Timeout');
+        const isRateLimit = error.message.includes('429');
+
         if (attempt < maxRetries - 1) {
-          await this.delay(1000 * (attempt + 1));
+          let backoffDelay;
+          if (isRateLimit) {
+            backoffDelay = 2000 * (attempt + 1);
+          } else if (isTimeout) {
+            backoffDelay = 1000 * (attempt + 1);
+          } else {
+            backoffDelay = 500 * (attempt + 1);
+          }
+
+          if (attempt >= 2) {
+            console.warn(`[HLSDownloader] Segment ${index} attempt ${attempt + 1} failed: ${error.message}, retrying in ${backoffDelay}ms...`);
+          }
+
+          await this.delay(backoffDelay);
         }
       }
     }
 
-    throw new Error(`Failed to download segment ${index} after ${maxRetries} attempts: ${lastError?.message}`);
+    throw new Error(`Failed after ${maxRetries} attempts: ${lastError?.message}`);
   }
 
   async createLocalPlaylist() {
@@ -485,13 +589,18 @@ class HLSDownloader {
       playlistContent += `#EXT-X-MAP:URI="${initPath}"\n`;
     }
 
+    let includedSegments = 0;
     for (const segment of this.segments) {
+      // Skip segments that failed to download
+      if (!segment.localFilename) continue;
+
       playlistContent += `#EXTINF:${segment.duration.toFixed(6)},\n`;
       let absoluteSegmentPath = `${this.segmentsDir}${segment.localFilename}`;
       if (!absoluteSegmentPath.startsWith('file://')) {
         absoluteSegmentPath = `file://${absoluteSegmentPath}`;
       }
       playlistContent += `${absoluteSegmentPath}\n`;
+      includedSegments++;
     }
 
     playlistContent += '#EXT-X-ENDLIST\n';

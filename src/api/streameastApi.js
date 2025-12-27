@@ -217,12 +217,12 @@ export const extractM3U8Direct = async (streameastUrl) => {
     const phpHtml = phpResponse.data;
 
     // Step 4: Extract the streamcenter.pro iframe URL
-    const iframeMatch = phpHtml.match(/streamcenter\.pro\/embed\/hls\.php\?stream=[^"'\s]+/);
+    const iframeMatch = phpHtml.match(/[^\s"']+\/hls\.php\?stream=[^"'\s]+/);
     if (!iframeMatch) {
-      throw new Error('Could not find streamcenter.pro iframe URL');
+      throw new Error('Could not find iframe URL');
     }
     
-    const iframeUrl = "https://" + iframeMatch[0];
+    const iframeUrl = "https:" + iframeMatch[0];
 
     // Step 5: Fetch the iframe page with the PHP URL as referer
     const iframeResponse = await axios.get(iframeUrl, {

@@ -89,41 +89,51 @@ class FFmpegConverter {
       const hasInit = await this.hasInitSegment(segmentsDirClean);
       const isFragmentedMp4 = segmentFiles[0]?.endsWith('.m4s') || hasInit;
 
-      const concatFilePath = `${segmentsDirClean}concat_list.txt`;
-      let concatContent = '';
+      // Create an HLS playlist with discontinuity markers for missing segments
+      const playlistPath = `${segmentsDirClean}ffmpeg_playlist.m3u8`;
+      let playlistContent = '#EXTM3U\n';
+      playlistContent += '#EXT-X-VERSION:3\n';
+      playlistContent += '#EXT-X-TARGETDURATION:10\n';
+      playlistContent += '#EXT-X-MEDIA-SEQUENCE:0\n';
+      playlistContent += '#EXT-X-PLAYLIST-TYPE:VOD\n';
 
       if (isFragmentedMp4 && hasInit) {
-        concatContent += `file '${segmentsDirClean}init.mp4'\n`;
+        playlistContent += `#EXT-X-MAP:URI="${segmentsDirClean}init.mp4"\n`;
       }
 
-      for (const segmentFile of segmentFiles) {
-        concatContent += `file '${segmentsDirClean}${segmentFile}'\n`;
+      // Parse segment numbers and detect gaps
+      const segmentNumbers = segmentFiles.map(f => {
+        const match = f.match(/segment_(\d+)/);
+        return match ? parseInt(match[1]) : -1;
+      }).filter(n => n >= 0);
+
+      let lastSegmentNum = -1;
+      for (let i = 0; i < segmentFiles.length; i++) {
+        const currentNum = segmentNumbers[i];
+
+        // Add discontinuity marker if there's a gap in segment numbers
+        if (lastSegmentNum >= 0 && currentNum !== lastSegmentNum + 1) {
+          playlistContent += '#EXT-X-DISCONTINUITY\n';
+        }
+
+        playlistContent += '#EXTINF:4.5,\n';
+        playlistContent += `${segmentsDirClean}${segmentFiles[i]}\n`;
+        lastSegmentNum = currentNum;
       }
 
-      await LegacyFileSystem.writeAsStringAsync(concatFilePath, concatContent);
+      playlistContent += '#EXT-X-ENDLIST\n';
 
-      let command;
-      if (isFragmentedMp4) {
-        command = [
-          '-f', 'concat',
-          '-safe', '0',
-          '-i', concatFilePath,
-          '-c', 'copy',
-          '-movflags', '+faststart',
-          '-y',
-          outputPathClean
-        ].join(' ');
-      } else {
-        command = [
-          '-f', 'concat',
-          '-safe', '0',
-          '-i', concatFilePath,
-          '-c', 'copy',
-          '-movflags', '+faststart',
-          '-y',
-          outputPathClean
-        ].join(' ');
-      }
+      await LegacyFileSystem.writeAsStringAsync(playlistPath, playlistContent);
+
+      // Use HLS demuxer which handles discontinuities properly
+      const command = [
+        '-allowed_extensions', 'ALL',
+        '-i', playlistPath,
+        '-c', 'copy',
+        '-movflags', '+faststart',
+        '-y',
+        outputPathClean
+      ].join(' ');
 
       if (onProgress) {
         FFmpegKitConfig.enableStatisticsCallback((statistics) => {
@@ -142,7 +152,8 @@ class FFmpegConverter {
 
       const returnCode = await session.getReturnCode();
 
-      await LegacyFileSystem.deleteAsync(concatFilePath, { idempotent: true });
+      // Clean up playlist file
+      await LegacyFileSystem.deleteAsync(playlistPath, { idempotent: true });
 
       if (ReturnCode.isSuccess(returnCode)) {
         const outputFile = new File(outputPathClean);
@@ -167,6 +178,7 @@ class FFmpegConverter {
         };
       } else {
         const logs = await session.getAllLogsAsString();
+        console.error(`[FFmpegConverter] Conversion failed:`, logs);
         this.isConverting = false;
         this.currentSessionId = null;
 
