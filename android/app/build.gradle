@@ -1,3 +1,6 @@
+// @generated begin ffmpeg-kit-import-url - expo prebuild (DO NOT MODIFY) sync-8bd7354f82782a2cb19c1c4c23868f577925b28a
+import java.net.URL
+// @generated end ffmpeg-kit-import-url
 apply plugin: "com.android.application"
 apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
@@ -82,6 +85,14 @@ def enableMinifyInReleaseBuilds = (findProperty('android.enableMinifyInReleaseBu
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
 
 android {
+// @generated begin ffmpeg-kit-app-flatdir-repo - expo prebuild (DO NOT MODIFY) sync-aa5de82b91bd3edb910bdd03960cad8a3c4dc4e1
+
+   repositories {
+       flatDir {
+           dirs "\${projectDir}/../libs"
+       }
+   }
+// @generated end ffmpeg-kit-app-flatdir-repo
     ndkVersion rootProject.ext.ndkVersion
 
     buildToolsVersion rootProject.ext.buildToolsVersion
@@ -92,8 +103,8 @@ android {
         applicationId 'me.byteful.flux'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 9
-        versionName "1.2.1-BETA"
+        versionCode 11
+        versionName "1.2.2"
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
     }
@@ -153,6 +164,11 @@ android {
 }
 
 dependencies {
+// @generated begin ffmpeg-kit-dependencies - expo prebuild (DO NOT MODIFY) sync-a79799fe7ffb9b0e0418023aabe2a56461655afd
+
+   implementation(name: 'ffmpeg-kit-full-gpl', ext: 'aar')
+   implementation 'com.arthenica:smart-exception-java:0.2.1'
+// @generated end ffmpeg-kit-dependencies
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
 
@@ -179,4 +195,46 @@ dependencies {
     } else {
         implementation jscFlavor
     }
+}
+
+
+// Download AAR
+def aarUrl = 'https://github.com/NooruddinLakhani/ffmpeg-kit-full-gpl/releases/download/v1.0.0/ffmpeg-kit-full-gpl.aar'
+def aarFile = file("${projectDir}/../libs/ffmpeg-kit-full-gpl.aar")
+
+// Ensure directory exists
+if (!aarFile.parentFile.exists()) {
+   aarFile.parentFile.mkdirs()
+}
+
+// Download during configuration if not present
+if (!aarFile.exists()) {
+   println "[ffmpeg-kit] Downloading AAR from $aarUrl..."
+   try {
+       new URL(aarUrl).withInputStream { i ->
+           aarFile.withOutputStream { it << i }
+       }
+       println "[ffmpeg-kit] AAR downloaded successfully"
+   } catch (Exception e) {
+       println "[ffmpeg-kit] Failed to download AAR during configuration: ${e.message}"
+   }
+}
+
+afterEvaluate {
+   tasks.register("downloadAar") {
+       description = "Downloads ffmpeg-kit AAR file"
+       group = "ffmpeg-kit"
+       outputs.file(aarFile)
+       doLast {
+           if (!aarFile.exists()) {
+               println "[ffmpeg-kit] Downloading AAR from $aarUrl..."
+               new URL(aarUrl).withInputStream { i ->
+                   aarFile.withOutputStream { it << i }
+               }
+               println "[ffmpeg-kit] AAR downloaded successfully"
+           }
+       }
+   }
+
+   preBuild.dependsOn("downloadAar")
 }

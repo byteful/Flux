@@ -14,7 +14,7 @@ const SUBTITLES_ENABLED_KEY = 'subtitlesEnabled'; // New key for enabled state
 const STREAM_SOURCE_ORDER_KEY = 'streamSourceOrder';
 const STREAM_SOURCE_SIGNATURE_KEY = 'streamSourceSignature';
 
-export const FLUX_SOURCE_URL = "https://streamprovider.koyeb.app/";
+export const FLUX_SOURCE_URL = "https://streamprovider.byteful.me/";
 
 // Define default sources here, so it's accessible by other modules if needed
 // This should match the `name` property of the sources in vidsrcApi.js

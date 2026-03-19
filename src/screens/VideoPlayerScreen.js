@@ -163,6 +163,8 @@ const VideoPlayerScreen = ({ route }) => {
     lastPositionRef.current = 0;
     lastPositionTimeRef.current = 0;
     manualFinishTriggeredRef.current = false;
+    pendingPlayRef.current = false;
+    resumeTimeRef.current = 0;
     setRetryAttempts(prev => prev + 1);
   }, [player]);
 
@@ -349,6 +351,8 @@ const VideoPlayerScreen = ({ route }) => {
 
   const [retryAttempts, setRetryAttempts] = useState(0);
   const isMountedRef = useRef(true);
+  const pendingPlayRef = useRef(false);
+  const resumeTimeRef = useRef(0);
 
   useEffect(() => {
     if (player && videoUrl) {
@@ -373,27 +377,14 @@ const VideoPlayerScreen = ({ route }) => {
   }, [player, videoUrl, showControls, subtitlesEnabled]);
 
   useEffect(() => {
+    resumeTimeRef.current = resumeTime;
+  }, [resumeTime]);
+
+  useEffect(() => {
     if (!player || !videoUrl || isUnmounting) return;
-
+    pendingPlayRef.current = true;
     setLoading(true);
-
-    const playTimer = setTimeout(() => {
-      if (isUnmounting || !player) return;
-      try {
-        if (resumeTime > 0) {
-          player.currentTime = resumeTime;
-        }
-        player.play();
-      } catch (e) {
-        console.error("Error during post-replace seek/play:", e);
-        setError({ message: "Failed to start playback after loading." });
-        setLoading(false);
-        setIsInitialLoading(false);
-      }
-    }, 1000);
-
-    return () => clearTimeout(playTimer);
-  }, [player, videoUrl, resumeTime, isUnmounting]);
+  }, [player, videoUrl, isUnmounting]);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -507,6 +498,20 @@ const VideoPlayerScreen = ({ route }) => {
     if (isPlayerLoadedAndReady) {
       newIsInitialLoadingState = false;
       newLoadingState = false;
+
+      if (pendingPlayRef.current && !isUnmounting) {
+        pendingPlayRef.current = false;
+        try {
+          const seekTo = resumeTimeRef.current;
+          if (seekTo > 0) {
+            player.currentTime = seekTo;
+            resumeTimeRef.current = 0;
+          }
+          player.play();
+        } catch (e) {
+          console.error("Error auto-playing on ready:", e);
+        }
+      }
     } else if (hasPlayerErroredOrFailed) {
       newIsInitialLoadingState = false;
       newLoadingState = false;
