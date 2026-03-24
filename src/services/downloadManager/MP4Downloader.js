@@ -3,6 +3,8 @@ import { File } from 'expo-file-system';
 import * as LegacyFileSystem from 'expo-file-system/legacy';
 import { ensureDirectoryExists } from '../../utils/downloadStorage';
 
+const STALL_TIMEOUT_MS = 30000;
+
 class MP4Downloader {
   constructor(entry, onProgress, onComplete, onError) {
     this.entry = entry;
@@ -14,6 +16,9 @@ class MP4Downloader {
     this.isCancelled = false;
     this.downloadResumable = null;
     this.contentDir = entry.filePath;
+    this.lastBytesWritten = 0;
+    this.lastProgressTime = Date.now();
+    this.stallCheckInterval = null;
   }
 
   async start() {
@@ -41,6 +46,11 @@ class MP4Downloader {
 
           const { totalBytesExpectedToWrite, totalBytesWritten } = downloadProgress;
 
+          if (totalBytesWritten > this.lastBytesWritten) {
+            this.lastBytesWritten = totalBytesWritten;
+            this.lastProgressTime = Date.now();
+          }
+
           if (totalBytesExpectedToWrite > 0) {
             const progress = (totalBytesWritten / totalBytesExpectedToWrite) * 100;
             this.reportProgress(progress, 'downloading', totalBytesWritten, totalBytesExpectedToWrite);
@@ -48,7 +58,11 @@ class MP4Downloader {
         }
       );
 
+      this.startStallDetection();
+
       const result = await this.downloadResumable.downloadAsync();
+
+      this.clearStallDetection();
 
       if (this.isCancelled) return;
 
@@ -71,6 +85,7 @@ class MP4Downloader {
         });
       }
     } catch (error) {
+      this.clearStallDetection();
       if (this.onError && !this.isCancelled) {
         this.onError(error);
       }
@@ -79,6 +94,7 @@ class MP4Downloader {
 
   async pause() {
     this.isPaused = true;
+    this.clearStallDetection();
     if (this.downloadResumable) {
       try {
         const savable = await this.downloadResumable.pauseAsync();
@@ -92,6 +108,8 @@ class MP4Downloader {
 
   async resume(savable = null) {
     this.isPaused = false;
+    this.lastProgressTime = Date.now();
+    this.startStallDetection();
     if (this.downloadResumable) {
       try {
         const result = await this.downloadResumable.resumeAsync();
@@ -118,9 +136,36 @@ class MP4Downloader {
     }
   }
 
+  startStallDetection() {
+    this.clearStallDetection();
+    this.stallCheckInterval = setInterval(() => {
+      if (this.isPaused || this.isCancelled) return;
+
+      const elapsed = Date.now() - this.lastProgressTime;
+      if (elapsed > STALL_TIMEOUT_MS) {
+        this.clearStallDetection();
+        if (this.onError && !this.isCancelled) {
+          this.isCancelled = true;
+          if (this.downloadResumable) {
+            this.downloadResumable.pauseAsync().catch(() => {});
+          }
+          this.onError(new Error('Download stalled — no progress for 30 seconds'));
+        }
+      }
+    }, 5000);
+  }
+
+  clearStallDetection() {
+    if (this.stallCheckInterval) {
+      clearInterval(this.stallCheckInterval);
+      this.stallCheckInterval = null;
+    }
+  }
+
   cancel() {
     this.isCancelled = true;
     this.isPaused = false;
+    this.clearStallDetection();
     if (this.downloadResumable) {
       this.downloadResumable.pauseAsync().catch(() => {});
     }

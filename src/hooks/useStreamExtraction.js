@@ -9,6 +9,7 @@ import {
 } from '../utils/storage';
 import { buildStreamHeaders } from '../utils/streamHeaders';
 import { isFutureDate } from '../utils/timeUtils';
+import { resolveHighestQualityStream } from '../utils/m3u8QualitySelector';
 import downloadManager from '../services/downloadManager';
 import { generateDownloadId, getDownloadEntry, DOWNLOAD_STATUS } from '../utils/downloadStorage';
 import * as LegacyFileSystem from 'expo-file-system/legacy';
@@ -16,9 +17,9 @@ import * as LegacyFileSystem from 'expo-file-system/legacy';
 const getBufferOptions = () => ({
   preferredForwardBufferDuration: 3600,
   maxBufferBytes: null,
-  minBufferForPlayback: 2,
+  minBufferForPlayback: 5,
   prioritizeTimeOverSizeThreshold: true,
-  waitsToMinimizeStalling: false,
+  waitsToMinimizeStalling: true,
 });
 
 export const useStreamExtraction = ({
@@ -62,6 +63,20 @@ export const useStreamExtraction = ({
     return buildStreamHeaders(videoUrl, streamReferer);
   }, [videoUrl, streamReferer]);
 
+  const resolveAndPlay = useCallback(async (streamUrl, referer) => {
+    const headers = buildStreamHeaders(streamUrl, referer);
+    const isM3U8 = streamUrl.includes('.m3u8') || streamUrl.includes('m3u8');
+    const finalUrl = isM3U8
+      ? await resolveHighestQualityStream(streamUrl, headers)
+      : streamUrl;
+
+    await player.replaceAsync({
+      uri: finalUrl,
+      headers,
+      bufferOptions: getBufferOptions(),
+    });
+  }, [player]);
+
   const setupLiveStreamExtraction = useCallback((isMountedRef) => {
     if (!isMountedRef.current) return;
     setCurrentAttemptingSource('StreamEast');
@@ -81,10 +96,8 @@ export const useStreamExtraction = ({
         setCurrentWebViewConfig(null);
         setCurrentAttemptingSource(null);
         setIsLiveStream(true);
-        player.replaceAsync({ 
-          uri: streamUrl, 
-          headers: buildStreamHeaders(streamUrl, null),
-          bufferOptions: getBufferOptions(),
+        resolveAndPlay(streamUrl, null).catch(e => {
+          onError({ message: `Playback failed: ${e.message}` });
         });
       },
       (err, sourceName) => {
@@ -114,7 +127,7 @@ export const useStreamExtraction = ({
         setCaptchaUrl(null);
       }
     );
-  }, [streameastUrl, player, streamExtractionComplete, onError]);
+  }, [streameastUrl, player, streamExtractionComplete, onError, resolveAndPlay]);
 
   const setupStreamExtraction = useCallback((isMountedRef) => {
     if (!isMountedRef.current) return;
@@ -135,10 +148,8 @@ export const useStreamExtraction = ({
         setCaptchaUrl(null);
         setCurrentWebViewConfig(null);
         setCurrentAttemptingSource(null);
-        player.replaceAsync({ 
-          uri: streamUrl, 
-          headers: buildStreamHeaders(streamUrl, referer),
-          bufferOptions: getBufferOptions(),
+        resolveAndPlay(streamUrl, referer).catch(e => {
+          onError({ message: `Playback failed: ${e.message}` });
         });
         if (onFindSubtitles) onFindSubtitles();
       },
@@ -181,7 +192,7 @@ export const useStreamExtraction = ({
       },
       title
     );
-  }, [mediaId, mediaType, season, episode, title, episodeTitle, contentId, player, currentEpisodeAirDate, streamExtractionComplete, onError, onFindSubtitles]);
+  }, [mediaId, mediaType, season, episode, title, episodeTitle, contentId, player, currentEpisodeAirDate, streamExtractionComplete, onError, onFindSubtitles, resolveAndPlay]);
 
   const initializePlayer = useCallback(async (isMountedRef) => {
     if (isLive) {
@@ -316,16 +327,14 @@ export const useStreamExtraction = ({
       setStreamReferer(cachedStreamData.referer);
       setCurrentPlayingSourceName(cachedStreamData.sourceName);
       setStreamExtractionComplete(true);
-      player.replaceAsync({ 
-        uri: cachedStreamData.url, 
-        headers: buildStreamHeaders(cachedStreamData.url, cachedStreamData.referer),
-        bufferOptions: getBufferOptions(),
+      resolveAndPlay(cachedStreamData.url, cachedStreamData.referer).catch(e => {
+        onError({ message: `Playback failed: ${e.message}` });
       });
       if (onFindSubtitles) onFindSubtitles();
     } else if (isMountedRef.current) {
       setupStreamExtraction(isMountedRef);
     }
-  }, [isLive, isOffline, offlineFilePath, player, mediaType, mediaId, season, episode, contentId, checkSavedProgress, loadAutoPlaySetting, setAutoPlayEnabled, loadSubtitlePreference, onFindSubtitles, setupLiveStreamExtraction, setupStreamExtraction]);
+  }, [isLive, isOffline, offlineFilePath, player, mediaType, mediaId, season, episode, contentId, checkSavedProgress, loadAutoPlaySetting, setAutoPlayEnabled, loadSubtitlePreference, onFindSubtitles, setupLiveStreamExtraction, setupStreamExtraction, resolveAndPlay]);
 
   const openChangeSourceModal = useCallback(async (isInitialLoading) => {
     if (isInitialLoading || !player) return;
@@ -488,10 +497,8 @@ export const useStreamExtraction = ({
       setCurrentPlayingSourceName(sourceName);
       setVideoUrl(streamUrl);
       setStreamExtractionComplete(true);
-      player.replaceAsync({ 
-        uri: streamUrl, 
-        headers: buildStreamHeaders(streamUrl, referer),
-        bufferOptions: getBufferOptions(),
+      resolveAndPlay(streamUrl, referer).catch(e => {
+        onError({ message: `Playback failed: ${e.message}` });
       });
       setTimeout(() => {
         if (player && currentPositionToResume > 0) {
@@ -554,7 +561,7 @@ export const useStreamExtraction = ({
       provideWebViewConfigForAttempt,
       title
     );
-  }, [player, contentId, mediaId, mediaType, season, episode, title, isChangingSource, manualWebViewVisible, onError]);
+  }, [player, contentId, mediaId, mediaType, season, episode, title, isChangingSource, manualWebViewVisible, onError, resolveAndPlay]);
 
   const closeSourceModal = useCallback((isUnmounting) => {
     setShowSourceSelectionModal(false);

@@ -251,7 +251,7 @@ export const getAutoPlaySetting = async () => {
     return settingString ? JSON.parse(settingString) : true;
   } catch (error) {
     console.error('Error getting auto-play setting:', error);
-    return false;
+    return true;
   }
 };
 

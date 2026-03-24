@@ -4,6 +4,7 @@ import * as LegacyFileSystem from 'expo-file-system/legacy';
 import storageManager from './StorageManager';
 import { ensureDirectoryExists } from '../../utils/downloadStorage';
 import ffmpegConverter from './FFmpegConverter';
+import { resolveUrl, selectBestVariantByHeight } from '../../utils/m3u8QualitySelector';
 
 class HLSDownloader {
   constructor(entry, onProgress, onComplete, onError) {
@@ -237,7 +238,7 @@ class HLSDownloader {
           result.variants.push({
             bandwidth: parseInt(bandwidth) || 0,
             resolution: resolution || 'unknown',
-            url: this.resolveUrl(nextLine, baseUrl),
+            url: resolveUrl(nextLine, baseUrl),
           });
           i++;
         }
@@ -248,7 +249,7 @@ class HLSDownloader {
         const uri = this.extractAttribute(line, 'URI');
         if (uri) {
           result.initSegment = {
-            url: this.resolveUrl(uri, baseUrl),
+            url: resolveUrl(uri, baseUrl),
             byteRange: this.extractAttribute(line, 'BYTERANGE'),
           };
         }
@@ -276,7 +277,7 @@ class HLSDownloader {
       if (!line.startsWith('#')) {
         if (expectingSegmentUrl || this.isSegmentUrl(line)) {
           result.segments.push({
-            url: this.resolveUrl(line, baseUrl),
+            url: resolveUrl(line, baseUrl),
             duration: currentSegmentDuration,
             index: result.segments.length,
             byteRange: currentByteRange,
@@ -324,37 +325,19 @@ class HLSDownloader {
     return null;
   }
 
-  resolveUrl(relativeUrl, baseUrl) {
-    if (relativeUrl.startsWith('http://') || relativeUrl.startsWith('https://')) {
-      return relativeUrl;
-    }
-
-    try {
-      const base = new URL(baseUrl);
-      if (relativeUrl.startsWith('/')) {
-        return `${base.protocol}//${base.host}${relativeUrl}`;
-      }
-      const basePath = baseUrl.substring(0, baseUrl.lastIndexOf('/') + 1);
-      return basePath + relativeUrl;
-    } catch (error) {
-      return relativeUrl;
-    }
-  }
-
   selectBestVariant(variants) {
     if (!variants || variants.length === 0) return null;
 
-    const sorted = [...variants].sort((a, b) => b.bandwidth - a.bandwidth);
+    const withHeight = variants.map(v => ({
+      ...v,
+      height: v.resolution ? parseInt(v.resolution.split('x')[1]) || 0 : 0,
+    }));
 
-    const preferred = sorted.find(v => {
-      if (v.resolution) {
-        const height = parseInt(v.resolution.split('x')[1]);
-        return height <= 1080 && height >= 720;
-      }
-      return true;
-    });
+    const best = selectBestVariantByHeight(withHeight);
+    if (!best) return variants[0];
 
-    return preferred || sorted[0];
+    const idx = withHeight.indexOf(best);
+    return variants[idx];
   }
 
   async downloadInitSegment() {
@@ -368,6 +351,8 @@ class HLSDownloader {
     let lastError = null;
 
     for (let attempt = 0; attempt < maxRetries; attempt++) {
+      await this.deleteFileIfExists(filePath);
+
       try {
         const headers = {};
         if (this.entry.streamReferer) {
@@ -421,10 +406,18 @@ class HLSDownloader {
   }
 
   async downloadWithTimeout(url, filePath, headers, timeoutMs) {
-    const downloadPromise = LegacyFileSystem.downloadAsync(url, filePath, { headers });
+    let timedOut = false;
+    let timerId;
+
+    const downloadPromise = LegacyFileSystem.downloadAsync(url, filePath, { headers }).then(result => {
+      clearTimeout(timerId);
+      if (timedOut) throw new Error('Download completed after timeout — discarding');
+      return result;
+    });
 
     const timeoutPromise = new Promise((_, reject) => {
-      setTimeout(() => {
+      timerId = setTimeout(() => {
+        timedOut = true;
         reject(new Error(`Download timeout after ${timeoutMs}ms`));
       }, timeoutMs);
     });
@@ -432,38 +425,62 @@ class HLSDownloader {
     return Promise.race([downloadPromise, timeoutPromise]);
   }
 
+  async deleteFileIfExists(filePath) {
+    try {
+      await LegacyFileSystem.deleteAsync(filePath, { idempotent: true });
+    } catch {
+      // Ignore cleanup errors
+    }
+  }
+
   async downloadSegmentsConcurrently() {
     const segmentIndices = Array.from({ length: this.segments.length }, (_, i) => i);
     let currentIndex = 0;
     let activeDownloads = 0;
-    let lastLoggedProgress = 0;
-    const startTime = Date.now();
+    const stallTimeoutMs = 90000;
 
     return new Promise((resolve, reject) => {
+      let stallCheckInterval = null;
+      let resolved = false;
+
+      const finish = () => {
+        if (resolved) return;
+        resolved = true;
+        if (stallCheckInterval) clearInterval(stallCheckInterval);
+        resolve();
+      };
+
+      const failWithStall = () => {
+        if (resolved) return;
+        resolved = true;
+        if (stallCheckInterval) clearInterval(stallCheckInterval);
+        reject(new Error('Download stalled — no segment completed for 90 seconds'));
+      };
+
+      stallCheckInterval = setInterval(() => {
+        if (this.isPaused || this.isCancelled || resolved) return;
+        if (Date.now() - this.lastProgressTime > stallTimeoutMs && activeDownloads > 0) {
+          failWithStall();
+        }
+      }, 10000);
+
       const processNext = async () => {
+        if (resolved) return;
+
         while (this.isPaused) {
           await this.delay(500);
-          if (this.isCancelled) {
-            resolve();
-            return;
-          }
+          if (this.isCancelled) { finish(); return; }
         }
 
-        if (this.isCancelled) {
-          resolve();
-          return;
-        }
+        if (this.isCancelled) { finish(); return; }
 
         if (currentIndex >= segmentIndices.length && activeDownloads === 0) {
-          resolve();
+          finish();
           return;
         }
 
         while (activeDownloads < this.concurrentDownloads && currentIndex < segmentIndices.length) {
-          if (this.isCancelled) {
-            resolve();
-            return;
-          }
+          if (this.isCancelled || resolved) { finish(); return; }
 
           const segmentIndex = segmentIndices[currentIndex];
           currentIndex++;
@@ -488,7 +505,6 @@ class HLSDownloader {
         }
       };
 
-      // Start initial batch of downloads
       processNext();
     });
   }
@@ -499,13 +515,17 @@ class HLSDownloader {
     const filePath = `${this.segmentsDir}${filename}`;
 
     const maxRetries = 5;
-    const timeoutMs = 15000;
+    const baseTimeoutMs = 15000;
     let lastError = null;
 
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       if (this.isCancelled) {
         throw new Error('Download cancelled');
       }
+
+      await this.deleteFileIfExists(filePath);
+
+      const timeoutMs = baseTimeoutMs + (attempt * 5000);
 
       try {
         const headers = {};
@@ -556,7 +576,7 @@ class HLSDownloader {
           if (isRateLimit) {
             backoffDelay = 2000 * (attempt + 1);
           } else if (isTimeout) {
-            backoffDelay = 1000 * (attempt + 1);
+            backoffDelay = 1500 * (attempt + 1);
           } else {
             backoffDelay = 500 * (attempt + 1);
           }

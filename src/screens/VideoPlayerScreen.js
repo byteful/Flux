@@ -358,21 +358,23 @@ const VideoPlayerScreen = ({ route }) => {
     if (player && videoUrl) {
       player.allowsExternalPlayback = true;
       player.showNowPlayingNotification = true;
-      if (subtitlesEnabled) {
-        player.timeUpdateEventInterval = 1;
-      } else if (showControls) {
+      player.bufferOptions = {
+        preferredForwardBufferDuration: 3600,
+        maxBufferBytes: null,
+        minBufferForPlayback: 5,
+        prioritizeTimeOverSizeThreshold: true,
+        waitsToMinimizeStalling: true,
+      };
+    }
+  }, [player, videoUrl]);
+
+  useEffect(() => {
+    if (player && videoUrl) {
+      if (subtitlesEnabled || showControls) {
         player.timeUpdateEventInterval = 1;
       } else {
         player.timeUpdateEventInterval = 1000;
       }
-      
-      player.bufferOptions = {
-        preferredForwardBufferDuration: 3600,
-        maxBufferBytes: null,
-        minBufferForPlayback: 2,
-        prioritizeTimeOverSizeThreshold: true,
-        waitsToMinimizeStalling: false,
-      };
     }
   }, [player, videoUrl, showControls, subtitlesEnabled]);
 

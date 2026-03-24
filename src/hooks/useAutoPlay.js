@@ -19,7 +19,7 @@ export const useAutoPlay = ({
   handleGoBack,
   setIsUnmounting,
 }) => {
-  const [autoPlayEnabled, setAutoPlayEnabled] = useState(false);
+  const [autoPlayEnabled, setAutoPlayEnabled] = useState(true);
   const [showNextEpisodeButton, setShowNextEpisodeButton] = useState(false);
   const [isFindingNextEpisode, setIsFindingNextEpisode] = useState(false);
   const nextEpisodeDetailsRef = useRef(null);
